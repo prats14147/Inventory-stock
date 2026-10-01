@@ -1,0 +1,83 @@
+"""
+backend/app/repositories/inventory_repository.py
+
+"Current" inventory is defined as the latest date present in the dataset
+(the data is historical, 2022-01-01 to 2024-01-01, so there is no literal
+present-day row -- see docs/limitations.md).
+"""
+
+from datetime import date
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.models import DailyInventory, DailySales
+
+
+def get_latest_date(db: Session) -> date | None:
+    return db.execute(select(func.max(DailyInventory.date))).scalar_one_or_none()
+
+
+def get_current_inventory_rows(db: Session, product_id: str, as_of: date | None = None) -> list[DailyInventory]:
+    """All store-level rows for a product on the reference date (default: latest date in the data)."""
+    ref_date = as_of or get_latest_date(db)
+    if ref_date is None:
+        return []
+    stmt = select(DailyInventory).where(
+        DailyInventory.product_id == product_id,
+        DailyInventory.date == ref_date,
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def get_all_current_inventory(
+    db: Session,
+    as_of: date | None = None,
+    category: str | None = None,
+    region: str | None = None,
+) -> list[dict]:
+    """
+    Current inventory across all products/stores, optionally filtered by
+    category/region (joined from DailySales on the shared composite key,
+    since category/region are not stable attributes of product/store --
+    see docs/limitations.md).
+    """
+    ref_date = as_of or get_latest_date(db)
+    if ref_date is None:
+        return []
+
+    stmt = (
+        select(
+            DailyInventory.date,
+            DailyInventory.store_id,
+            DailyInventory.product_id,
+            DailyInventory.inventory_level,
+            DailyInventory.units_ordered,
+            DailySales.category,
+            DailySales.region,
+        )
+        .join(
+            DailySales,
+            (DailySales.date == DailyInventory.date)
+            & (DailySales.store_id == DailyInventory.store_id)
+            & (DailySales.product_id == DailyInventory.product_id),
+        )
+        .where(DailyInventory.date == ref_date)
+    )
+    if category:
+        stmt = stmt.where(DailySales.category == category)
+    if region:
+        stmt = stmt.where(DailySales.region == region)
+
+    rows = db.execute(stmt).all()
+    return [dict(row._mapping) for row in rows]
+
+
+def get_low_stock_rows(
+    db: Session,
+    threshold: int,
+    as_of: date | None = None,
+) -> list[dict]:
+    """Store-product combinations whose current inventory is below `threshold`."""
+    all_rows = get_all_current_inventory(db, as_of=as_of)
+    return [row for row in all_rows if row["inventory_level"] < threshold]

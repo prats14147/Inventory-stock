@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: inventory_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: inventory_user
+      POSTGRES_PASSWORD: inventory_pass
+      POSTGRES_DB: inventory_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - inventory_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory_user -d inventory_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: inventory_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Note: "postgres" here is the Docker service name above, not
+      # "localhost" -- containers reach each other by service name.
+      DATABASE_URL: postgresql+psycopg2://inventory_user:inventory_pass@postgres:5432/inventory_db
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      DEFAULT_FORECAST_HORIZON: ${DEFAULT_FORECAST_HORIZON:-14}
+      DEFAULT_LEAD_TIME_DAYS: ${DEFAULT_LEAD_TIME_DAYS:-7}
+      SAFETY_STOCK_SERVICE_FACTOR: ${SAFETY_STOCK_SERVICE_FACTOR:-1.65}
+      LOW_STOCK_THRESHOLD: ${LOW_STOCK_THRESHOLD:-50}
+    ports:
+      - "8000:8000"
+
+  # frontend:
+  #   Added in Phase 9 once frontend/Dockerfile exists.
+
+volumes:
+  inventory_pgdata:

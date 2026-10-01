@@ -1,0 +1,18 @@
+2026-09-24 09:13:45,808 [INFO] Loading raw data from /home/claude/inventory-intelligence/data/raw/retail_store_inventory.csv
+2026-09-24 09:13:45,913 [INFO] Loaded 73100 rows, 15 columns
+2026-09-24 09:13:45,931 [INFO] Converted Date to datetime. Range: 2022-01-01 00:00:00 to 2024-01-01 00:00:00
+2026-09-24 09:13:45,948 [INFO] No missing values found.
+2026-09-24 09:13:45,977 [INFO] No fully duplicate rows found.
+2026-09-24 09:13:45,984 [INFO] (Date, Store ID, Product ID) is unique across all rows, as expected.
+2026-09-24 09:13:45,985 [INFO] Inventory Level: no negative values.
+2026-09-24 09:13:45,985 [INFO] Units Sold: no negative values.
+2026-09-24 09:13:45,985 [INFO] Units Ordered: no negative values.
+2026-09-24 09:13:45,985 [INFO] Price: no negative values.
+2026-09-24 09:13:45,986 [INFO] Discount: all values within [0, 100].
+2026-09-24 09:13:45,987 [INFO] Holiday/Promotion: all values in {0, 1}.
+2026-09-24 09:13:45,987 [INFO] Demand Forecast < 0: 673 rows (0.92%) -- clipping to 0. This column is reference-only and will NOT be used as a model feature.
+2026-09-24 09:13:45,988 [INFO] Units Sold >= Inventory Level: 369 rows (0.505%) -- flagged via new column 'possible_stock_constrained', values NOT altered. See docs/limitations.md for interpretation.
+2026-09-24 09:13:45,991 [INFO] Category: all values within expected set {'Furniture', 'Toys', 'Clothing', 'Electronics', 'Groceries'}
+2026-09-24 09:13:45,994 [INFO] Region: all values within expected set {'West', 'North', 'South', 'East'}
+2026-09-24 09:13:46,087 [INFO] Cleaning complete. Rows: 73100 -> 73100
+2026-09-24 09:13:46,395 [INFO] Wrote cleaned dataset to /home/claude/inventory-intelligence/data/processed/cleaned_inventory.csv (73100 rows)

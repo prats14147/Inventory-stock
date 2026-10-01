@@ -1,0 +1,55 @@
+=== DATASET OVERVIEW ===
+Shape: (73100, 16)
+Date range: 2022-01-01 00:00:00 to 2024-01-01 00:00:00
+Missing values total: 0
+Duplicate rows: 0
+
+Descriptive statistics (numeric columns):
+                                Date  Inventory Level    Units Sold  Units Ordered  Demand Forecast         Price      Discount  Holiday/Promotion  Competitor Pricing
+count                          73100     73100.000000  73100.000000   73100.000000     73100.000000  73100.000000  73100.000000       73100.000000        73100.000000
+mean   2022-12-31 23:59:59.999999744       274.469877    136.464870     110.004473       141.528727     55.135108     10.009508           0.497305           55.146077
+min              2022-01-01 00:00:00        50.000000      0.000000      20.000000         0.000000     10.000000      0.000000           0.000000            5.030000
+25%              2022-07-02 00:00:00       162.000000     49.000000      65.000000        53.670000     32.650000      5.000000           0.000000           32.680000
+50%              2023-01-01 00:00:00       273.000000    107.000000     110.000000       113.015000     55.050000     10.000000           0.000000           55.010000
+75%              2023-07-03 00:00:00       387.000000    203.000000     155.000000       208.052500     77.860000     15.000000           1.000000           77.820000
+max              2024-01-01 00:00:00       500.000000    499.000000     200.000000       518.550000    100.000000     20.000000           1.000000          104.940000
+std                              NaN       129.949514    108.919406      52.277448       109.209174     26.021945      7.083746           0.499996           26.191408
+
+=== PRODUCT ANALYSIS ===
+Top 5 products by total units sold:
+Product ID
+P0016    508472
+P0020    507708
+P0014    507622
+P0015    507283
+P0005    503648
+
+=== CATEGORY ANALYSIS ===
+Total units sold by category:
+Category
+Furniture      2025017
+Groceries      2000482
+Clothing       1999166
+Toys           1990485
+Electronics    1960432
+
+=== STORE ANALYSIS ===
+Total units sold by store:
+Store ID
+S003    2022696
+S005    2010176
+S002    1987715
+S004    1979245
+S001    1975750
+
+=== TIME ANALYSIS ===
+Daily sales -- mean: 13646.5, std: 1032.0
+Monthly sales -- mean: 399023.3, std: 81190.3
+
+=== RELATIONSHIPS ===
+Correlation matrix (Inventory, Units Sold, Price, Discount):
+                 Inventory Level  Units Sold     Price  Discount
+Inventory Level         1.000000    0.589995  0.009140  0.004889
+Units Sold              0.589995    1.000000  0.001082  0.002576
+Price                   0.009140    0.001082  1.000000  0.001509
+Discount                0.004889    0.002576  0.001509  1.000000

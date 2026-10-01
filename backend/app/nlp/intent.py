@@ -1,0 +1,29 @@
+"""backend/app/nlp/intent.py"""
+
+from enum import Enum
+
+
+class Intent(str, Enum):
+    CURRENT_STOCK = "CURRENT_STOCK"
+    LOW_STOCK = "LOW_STOCK"
+    TOP_SELLING = "TOP_SELLING"
+    BOTTOM_SELLING = "BOTTOM_SELLING"
+    SALES_TREND = "SALES_TREND"
+    PRODUCT_INFO = "PRODUCT_INFO"
+    DEMAND_FORECAST = "DEMAND_FORECAST"
+    STOCKOUT_RISK = "STOCKOUT_RISK"
+    REORDER_RECOMMENDATION = "REORDER_RECOMMENDATION"
+    CATEGORY_ANALYSIS = "CATEGORY_ANALYSIS"
+    STORE_ANALYSIS = "STORE_ANALYSIS"
+    HELP = "HELP"
+    UNKNOWN = "UNKNOWN"
+
+
+# Intents that require a resolved, existing product_id to proceed.
+PRODUCT_REQUIRED_INTENTS = {
+    Intent.CURRENT_STOCK,
+    Intent.PRODUCT_INFO,
+    Intent.DEMAND_FORECAST,
+    Intent.STOCKOUT_RISK,
+    Intent.REORDER_RECOMMENDATION,
+}
