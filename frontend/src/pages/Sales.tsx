@@ -5,6 +5,8 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import { useApi } from "../hooks/useApi";
 import { getTopProducts, getSalesByCategory, getSalesByStore, getSalesTrend } from "../services/api";
 import { LoadingState, ErrorState } from "../components/LoadingError";
+import PageHeader from "../components/PageHeader";
+import Card from "../components/Card";
 
 export default function Sales() {
   const [granularity, setGranularity] = useState<"daily" | "weekly" | "monthly">("monthly");
@@ -22,71 +24,74 @@ export default function Sales() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">Sales Analytics</h1>
+      <PageHeader
+        title="Sales Analytics"
+        subtitle="Trends, best sellers, and breakdowns by category and store — all from real sales records."
+      />
 
-      <div className="rounded-lg border bg-white p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-medium text-gray-600">Sales Trend</h2>
+      <Card
+        title="Sales Trend"
+        subtitle={`${granularity} granularity`}
+        actions={
           <select
-            className="rounded-md border px-2 py-1 text-sm"
+            className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
             value={granularity}
             onChange={(e) => setGranularity(e.target.value as "daily" | "weekly" | "monthly")}
+            aria-label="Trend granularity"
           >
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
             <option value="monthly">Monthly</option>
           </select>
-        </div>
+        }
+      >
         <ResponsiveContainer width="100%" height={280}>
           <LineChart data={trend.data?.points ?? []}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="period" fontSize={11} />
-            <YAxis fontSize={12} />
-            <Tooltip />
-            <Line type="monotone" dataKey="total_units_sold" stroke="#2563eb" dot={false} strokeWidth={2} />
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+            <XAxis dataKey="period" fontSize={11} tickLine={false} axisLine={{ stroke: "#e5e7eb" }} />
+            <YAxis fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v: number) => v.toLocaleString()} />
+            <Tooltip formatter={(v) => [`${Number(v).toLocaleString()} units`, "Sold"]} />
+            <Line type="monotone" dataKey="total_units_sold" stroke="#2563eb" dot={false} strokeWidth={2.5} />
           </LineChart>
         </ResponsiveContainer>
-      </div>
+      </Card>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="rounded-lg border bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-sm font-medium text-gray-600">Top-Selling Products</h2>
+        <Card title="Top-Selling Products" subtitle="Top 10 by units sold">
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={top.data?.products ?? []} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" fontSize={11} />
-              <YAxis type="category" dataKey="product_id" fontSize={11} width={50} />
-              <Tooltip />
-              <Bar dataKey="total_units_sold" fill="#2563eb" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis type="number" fontSize={11} tickLine={false} axisLine={false} />
+              <YAxis type="category" dataKey="product_id" fontSize={11} width={50} tickLine={false} axisLine={false} />
+              <Tooltip formatter={(v) => [`${Number(v).toLocaleString()} units`, "Sold"]} cursor={{ fill: "#eff6ff" }} />
+              <Bar dataKey="total_units_sold" fill="#2563eb" radius={[0, 6, 6, 0]} />
             </BarChart>
           </ResponsiveContainer>
-        </div>
+        </Card>
 
-        <div className="rounded-lg border bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-sm font-medium text-gray-600">Sales by Category</h2>
+        <Card title="Sales by Category" subtitle="Units sold per category">
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={byCategory.data ?? []}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="category" fontSize={10} />
-              <YAxis fontSize={11} />
-              <Tooltip />
-              <Bar dataKey="total_units_sold" fill="#55a868" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="category" fontSize={10} tickLine={false} axisLine={{ stroke: "#e5e7eb" }} />
+              <YAxis fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v: number) => v.toLocaleString()} />
+              <Tooltip formatter={(v) => [`${Number(v).toLocaleString()} units`, "Sold"]} cursor={{ fill: "#f0fdf4" }} />
+              <Bar dataKey="total_units_sold" fill="#16a34a" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-        </div>
+        </Card>
 
-        <div className="rounded-lg border bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-sm font-medium text-gray-600">Sales by Store</h2>
+        <Card title="Sales by Store" subtitle="Units sold per store">
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={byStore.data ?? []}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="store_id" fontSize={11} />
-              <YAxis fontSize={11} />
-              <Tooltip />
-              <Bar dataKey="total_units_sold" fill="#c44e52" />
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="store_id" fontSize={11} tickLine={false} axisLine={{ stroke: "#e5e7eb" }} />
+              <YAxis fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v: number) => v.toLocaleString()} />
+              <Tooltip formatter={(v) => [`${Number(v).toLocaleString()} units`, "Sold"]} cursor={{ fill: "#fef2f2" }} />
+              <Bar dataKey="total_units_sold" fill="#dc2626" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-        </div>
+        </Card>
       </div>
     </div>
   );

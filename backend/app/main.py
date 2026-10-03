@@ -12,14 +12,30 @@ Phases 4-7. Error handling (spec section 46):
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.routers import chat, forecast, health, inventory, products, reorder, sales, stockout
+from app.routers import (
+    chat,
+    dashboard,
+    forecast,
+    health,
+    inventory,
+    live,
+    products,
+    reorder,
+    sales,
+    stockout,
+    watchlist,
+    ws,
+)
+from app.services import simulator_service
 from app.services.errors import InvalidRequestError, NotFoundError
 
 settings = get_settings()
@@ -27,10 +43,27 @@ settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.log_level, logging.INFO))
 log = logging.getLogger("app")
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start/stop the demo data simulator with the app.
+
+    The simulator is opt-in (SIMULATOR_ENABLED) and can also be started later
+    from POST /api/simulator/start -- `docker compose up` therefore behaves
+    exactly as before unless someone asks for live traffic.
+    """
+    if settings.simulator_enabled:
+        started = simulator_service.get_simulator_service().start(asyncio.get_running_loop())
+        log.info("Data simulator auto-start: %s", started)
+    yield
+    simulator_service.get_simulator_service().stop()
+
+
 app = FastAPI(
     title="Inventory Intelligence System API",
     description="Retail inventory analytics, demand forecasting, stockout risk, reorder recommendations, and NLP chatbot.",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Dev-friendly CORS. allow_credentials is deliberately False: this app
@@ -72,6 +105,10 @@ app.include_router(forecast.router)
 app.include_router(stockout.router)
 app.include_router(reorder.router)
 app.include_router(chat.router)
+app.include_router(ws.router)
+app.include_router(live.router)
+app.include_router(watchlist.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/")

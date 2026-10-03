@@ -278,12 +278,59 @@ cd backend && uvicorn app.main:app --reload
 Then visit `http://localhost:8000/docs` for interactive API docs, or
 `http://localhost:8000/api/health` for a basic health check.
 
+## Real-Time Layer (Tier 1)
+
+A live, streaming path sits alongside the REST API. Nothing in the analytical
+path depends on it — it is an additive demo layer, off by default.
+
+- **Streaming chat** — `WS /api/chat/ws`. Reports the pipeline as it runs
+  (`analyzing_request` → `querying_database` → `phrasing_response`) and streams
+  the LLM's phrasing token by token. Token frames are *provisional*; the final
+  `chat_response` frame is authoritative and carries the same verified `data`
+  the REST endpoint returns, so the no-hallucination guarantee is unchanged.
+  The frontend falls back to `POST /api/chat` automatically if websockets are
+  unavailable (`frontend/src/hooks/useChatStream.ts`).
+- **Data simulator** — `POST /api/simulator/tick` runs one deterministic tick;
+  `POST /api/simulator/start|stop` drive a background ticker. Events are
+  sampled from the real per-(store, product) demand profile in Postgres.
+- **Proactive alerts** — after each tick, stockout risk is recomputed with the
+  same documented formula as `/api/stockout-risk`, projected forward with the
+  live drawdown, and an alert is raised when risk crosses a threshold
+  (`CRITICAL` / `WARNING`), with a cooldown so one condition is not re-announced
+  every tick. Every number in an alert message comes from a query or that
+  formula.
+- **Live dashboard** — `WS /api/live/ws` pushes sales events and alerts to the
+  React dashboard, which also shows open/critical alert counts and
+  acknowledge buttons (`frontend/src/hooks/useLiveStream.ts`).
+
+Isolation guarantee: live events are written to their own table
+(`live_sales_events`) and never to `daily_sales` / `daily_inventory`, so the
+history every model was trained and validated on stays byte-for-byte intact.
+See `docs/limitations.md` for the honest scope of this layer (single-process
+hub, synthetic live traffic, not part of any backtest).
+
+### Live demo
+```bash
+# Terminal 1 — API
+cd backend && python -m uvicorn app.main:app --reload
+
+# Terminal 2 — drive the simulator (or use the dashboard buttons)
+curl -X POST "http://localhost:8000/api/simulator/tick?events=3"
+curl -X POST "http://localhost:8000/api/simulator/start?tick_seconds=3"
+curl "http://localhost:8000/api/live/summary"
+curl "http://localhost:8000/api/live/alerts?acknowledged=false"
+```
+Set `SIMULATOR_ENABLED=true` to have the ticker start with the API instead.
+
 ## Testing
 ```bash
 pytest backend/tests/ tests/
 ```
-78 tests passing as of Phase 8 (Analytics, ML artifacts, Stockout/Reorder,
-NLP/chat pipeline, and full API integration via FastAPI's TestClient).
+138 tests passing: analytics services, ML artifacts, stockout/reorder, the
+NLP/chat pipeline (rules + LLM fallback), conversation memory, full API
+integration via FastAPI's TestClient, **WebSocket streaming chat**, and the
+**real-time layer** (simulator, alert engine, live hub, live REST/WebSocket
+endpoints).
 
 ## Limitations
 See `docs/limitations.md` — covers synthetic-data caveats, the

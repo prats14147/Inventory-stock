@@ -126,10 +126,33 @@ async function main() {
     const { body } = await post("/api/chat", { message: "How much stock does P0001 have?" });
     assert(body.intent === "CURRENT_STOCK", "chat correctly classifies intent");
     assert(body.data !== null && body.data.product_id === "P0001", "chat returns real backend data");
+    assert(typeof body.session_id === "string" && body.session_id.length > 0, "chat echoes a session_id");
 
     const { body: unknown } = await post("/api/chat", { message: "How much stock does P9999 have?" });
     assert(unknown.data === null, "unknown product returns null data (never fabricated)");
     assert(unknown.message.toLowerCase().includes("couldn't find"), "unknown product gets a clear not-found message");
+  }
+
+  console.log("\nChat sessions (Phase 11 memory contract):");
+  {
+    // Session resume: a second turn in the same session keeps context.
+    const first = await post("/api/chat", { message: "How much stock does P0001 have?" });
+    const sid = first.body.session_id;
+    const second = await post("/api/chat", { message: "Forecast it for 7 days", session_id: sid });
+    assert(second.body.session_id === sid, "same session_id continues the conversation");
+    assert(
+      second.body.entities && second.body.entities.product_id === "P0001",
+      "product entity carries over to the follow-up turn"
+    );
+
+    const { body: history } = await get(`/api/chat/sessions/${sid}/history`);
+    assert(history.turns.length === 2, "history returns both turns");
+    assert(history.turns[0].user_message.includes("P0001"), "first turn stored verbatim");
+
+    const { body: listed } = await get("/api/chat/sessions?limit=5");
+    assert(Array.isArray(listed.sessions), "session list returns sessions array");
+    const found = listed.sessions.find((s) => s.session_id === sid);
+    assert(found && typeof found.preview === "string", "listed session carries a preview label");
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

@@ -9,6 +9,7 @@ import Forecast from "./pages/Forecast";
 import Stockout from "./pages/Stockout";
 import Reorder from "./pages/Reorder";
 import Chatbot from "./pages/Chatbot";
+import Watchlist from "./pages/Watchlist";
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
           <Route path="/forecast" element={<Forecast />} />
           <Route path="/stockout" element={<Stockout />} />
           <Route path="/reorder" element={<Reorder />} />
+          <Route path="/watchlist" element={<Watchlist />} />
           <Route path="/chat" element={<Chatbot />} />
         </Routes>
       </main>

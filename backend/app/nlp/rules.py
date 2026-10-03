@@ -33,9 +33,42 @@ _INTENT_RULES: list[tuple[Intent, list[str]]] = [
     (Intent.STORE_ANALYSIS, ["by store", "store breakdown", "which store", "store analysis"]),
     (Intent.SALES_TREND, ["trend", "over time", "sales history", "sales pattern"]),
     (Intent.HELP, ["help", "what can you do", "what can you help"]),
-    (Intent.CURRENT_STOCK, ["how much stock", "current stock", "inventory level", "how much inventory", "stock do we have", "stock does"]),
+    (Intent.CURRENT_STOCK, [
+        "how much stock",
+        "current stock",
+        "inventory level",
+        "how much inventory",
+        "stock do we have",
+        "stock does",
+        "stock for",
+        "stock of",
+        "stock level for",
+    ]),
     (Intent.PRODUCT_INFO, ["tell me about", "information on", "info on", "details on"]),
 ]
+
+
+# Phrases that make a message a *follow-up* to the previous turn rather than
+# a standalone request: pronouns, ordinals and explicit callbacks. The rules
+# layer above cannot classify these on their own (there is no keyword in them),
+# so chat_service.ChatSessionManager reuses the previous product-scoped intent
+# for such messages instead of dropping them as UNKNOWN.
+_FOLLOW_UP_PATTERNS = [
+    r"\b(?:it|its|that|those|these|them|they|same|there)\b",
+    r"\b(?:what|how)\s+about\b",
+    r"\b(?:the\s+)?(?:first|second|third|fourth|fifth|last|other|next|previous)(?:\s+one)?\b",
+]
+
+
+def looks_like_follow_up(message: str) -> bool:
+    """True when `message` only makes sense with the conversation context.
+
+    Deliberately conservative: word boundaries keep "profit"/"units" from
+    being read as the pronoun "it". A False positive is harmless on its own
+    -- intent carryover is only attempted when the rules layer already gave
+    up (UNKNOWN) and a previous product-scoped intent exists.
+    """
+    return any(re.search(pattern, message, re.IGNORECASE) for pattern in _FOLLOW_UP_PATTERNS)
 
 
 def extract_entities(message: str) -> Entities:

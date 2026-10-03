@@ -16,6 +16,10 @@ import type { StockoutRiskResponse } from "../types/stockout";
 import type { ReorderResponse } from "../types/reorder";
 import type { ProductDetailResponse, ProductListResponse } from "../types/product";
 import type { ChatResponse } from "../types/chat";
+import type { ChatSessionHistory, ChatSessionInfo } from "../types/chat";
+import type { LiveSalesEvent, LiveSummary, SimulatorStatus, StockoutAlert } from "../types/live";
+import type { AlertDigest, WatchlistEntry, WatchlistListResponse } from "../types/watchlist";
+import type { DashboardSummary } from "../types/dashboard";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
@@ -112,6 +116,82 @@ export const getReorderList = (onlyNeeded = false) =>
 export const getReorder = (productId: string, leadTimeDays?: number) =>
   request<ReorderResponse>(`/api/reorder/${productId}${qs({ lead_time_days: leadTimeDays })}`);
 
-// --- Chat ---
-export const postChat = (message: string) =>
-  request<ChatResponse>("/api/chat", { method: "POST", body: JSON.stringify({ message }) });
+// --- Chat (Phase 11 conversation memory + Tier 1 streaming) ---
+export const postChat = (message: string, session_id?: string | null) =>
+  request<ChatResponse>("/api/chat", { method: "POST", body: JSON.stringify({ message, session_id: session_id ?? null }) });
+
+export const listChatSessions = (limit = 50) =>
+  request<{ sessions: ChatSessionInfo[]; total: number }>(`/api/chat/sessions${qs({ limit })}`);
+
+export const getChatSessionHistory = (sessionId: string) =>
+  request<ChatSessionHistory>(`/api/chat/sessions/${sessionId}/history`);
+
+export const deleteChatSession = (sessionId: string) =>
+  request<{ message: string; session_id: string }>(`/api/chat/sessions/${sessionId}`, { method: "DELETE" });
+
+export const createChatSession = () =>
+  request<{ session_id: string; created_at: string }>("/api/chat/sessions", { method: "POST", body: JSON.stringify({}) });
+
+// --- Live / real-time (Tier 1) ---
+export const getLiveSummary = () => request<LiveSummary>("/api/live/summary");
+export const getLiveEvents = (limit = 25) =>
+  request<{ count: number; events: LiveSalesEvent[] }>(`/api/live/events${qs({ limit })}`);
+export const getLiveAlerts = (acknowledged?: boolean, limit = 25) =>
+  request<{ count: number; alerts: StockoutAlert[] }>(`/api/live/alerts${qs({ acknowledged, limit })}`);
+export const acknowledgeAlert = (alertId: number) =>
+  request<StockoutAlert>(`/api/live/alerts/${alertId}/acknowledge`, { method: "POST" });
+
+/** Everything that fired on one UTC day, rolled up per product. */
+export const getAlertDigest = (date?: string) =>
+  request<AlertDigest>(`/api/live/digest${qs({ date })}`);
+
+export const getSimulatorStatus = () => request<SimulatorStatus>("/api/simulator/status");
+export const runSimulatorTick = (events?: number) =>
+  request<{ tick_at: string; events: LiveSalesEvent[]; alerts: StockoutAlert[]; suppressed_alerts: number }>(
+    `/api/simulator/tick${qs({ events })}`,
+    { method: "POST" }
+  );
+export const startSimulator = (tickSeconds?: number, eventsPerTick?: number) =>
+  request<{ started: boolean } & SimulatorStatus>(
+    `/api/simulator/start${qs({ tick_seconds: tickSeconds, events_per_tick: eventsPerTick })}`,
+    { method: "POST" }
+  );
+export const stopSimulator = () =>
+  request<{ stopped: boolean } & SimulatorStatus>("/api/simulator/stop", { method: "POST" });
+
+// --- Dashboard (Tier A) ---
+/** The whole dashboard in one request. Replaces five parallel calls. */
+export const getDashboardSummary = () => request<DashboardSummary>("/api/dashboard/summary");
+
+// --- Watchlist (pinned products) ---
+export const getWatchlist = () => request<WatchlistListResponse>("/api/watchlist");
+
+/** Cheap "is this pinned?" check -- returns just the ids, no live figures. */
+export const getWatchlistIds = () =>
+  request<{ count: number; product_ids: string[] }>("/api/watchlist/ids");
+
+export const pinProduct = (productId: string, note?: string) =>
+  request<WatchlistEntry>(`/api/watchlist/${encodeURIComponent(productId)}`, {
+    method: "POST",
+    body: JSON.stringify({ note: note ?? null }),
+  });
+
+export const setWatchlistNote = (productId: string, note: string | null) =>
+  request<WatchlistEntry>(`/api/watchlist/${encodeURIComponent(productId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ note }),
+  });
+
+export const unpinProduct = (productId: string) =>
+  request<{ unpinned: string }>(`/api/watchlist/${encodeURIComponent(productId)}`, { method: "DELETE" });
+
+/**
+ * WebSocket endpoints derived from the same base URL, so a deployment that
+ * points VITE_API_BASE_URL at a real host still gets websockets from it
+ * (http->ws, https->wss).
+ */
+export const liveStreamUrl = () => `${BASE_URL.replace(/^http/, "ws")}/api/live/ws`;
+export const chatStreamUrl = (sessionId?: string | null) => {
+  const base = `${BASE_URL.replace(/^http/, "ws")}/api/chat/ws`;
+  return sessionId ? `${base}?session_id=${encodeURIComponent(sessionId)}` : base;
+};

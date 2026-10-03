@@ -56,6 +56,42 @@ def get_full_history_dataframe(db: Session) -> pd.DataFrame:
     return df
 
 
+# --- Inference-time history cache (Tier A) ----------------------------------
+#
+# `daily_sales` / `daily_inventory` are HISTORICAL and immutable: the dataset
+# is fixed at 2022-01-01..2024-01-01, and the live simulator deliberately writes
+# to its own `live_sales_events` table and never mutates these two (see
+# app/models/realtime.py). So the joined history cannot change while the process
+# runs, and rebuilding it per call is pure waste.
+#
+# It is not a small waste: the stockout/reorder list forecasts every product,
+# and each forecast called this function twice -> 40 full-table joins for a
+# single page load. Caching it took that page from >25s to sub-second.
+#
+# Tests that write to these tables must call clear_history_cache() afterwards.
+
+_history_cache: pd.DataFrame | None = None
+
+
+def clear_history_cache() -> None:
+    """Drops the cached history frame. Required after any write to
+    daily_sales / daily_inventory (tests, or a future data reload)."""
+    global _history_cache
+    _history_cache = None
+
+
+def get_full_history_dataframe_cached(db: Session) -> pd.DataFrame:
+    """`get_full_history_dataframe`, built once per process.
+
+    The returned frame is shared, so callers must treat it as read-only --
+    every current caller only filters/copies out of it.
+    """
+    global _history_cache
+    if _history_cache is None:
+        _history_cache = get_full_history_dataframe(db)
+    return _history_cache
+
+
 def get_total_units_sold(db: Session, product_id: str) -> int:
     stmt = select(func.coalesce(func.sum(DailySales.units_sold), 0)).where(DailySales.product_id == product_id)
     return int(db.execute(stmt).scalar_one())

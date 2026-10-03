@@ -30,9 +30,29 @@ class Settings(BaseSettings):
     # Inventory thresholds
     low_stock_threshold: int = 50
 
+    # Stockout / reorder result cache (Tier A). The inputs are historical and
+    # immutable, so a cached risk/reorder row stays correct; the TTL is a
+    # safety valve for a future data reload, not a correctness requirement.
+    # 0 disables caching entirely (used by tests that mutate the source data).
+    risk_cache_ttl_seconds: float = 300.0
+
+    # Redis (for session storage)
+    redis_url: str = "redis://localhost:6379/0"
+
     # App
     environment: str = "development"
     log_level: str = "INFO"
+
+    # Real-time layer (Tier 1 demo). The simulator is OFF by default: it is a
+    # demo device, not a data source, and nothing in the analytical path may
+    # silently depend on it (see app/models/realtime.py).
+    simulator_enabled: bool = False
+    simulator_tick_seconds: float = 3.0
+    simulator_events_per_tick: int = 3
+    # Suppress a repeat alert for the same product at the same severity
+    # within this window (an unacknowledged alert stays in the panel until
+    # someone acts on it -- no need to re-announce it every tick).
+    simulator_alert_cooldown_seconds: int = 120
 
 
 @lru_cache

@@ -20,7 +20,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 from app.repositories import product_repository, sales_repository
-from app.repositories.sales_repository import get_full_history_dataframe
+from app.repositories.sales_repository import get_full_history_dataframe_cached
 from app.services.errors import NotFoundError
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -70,7 +70,7 @@ def forecast_product_demand(db: Session, product_id: str, horizon: int = 14) -> 
 
     model, metadata, actual_horizon = _load_model(horizon)
 
-    history = get_full_history_dataframe(db)
+    history = get_full_history_dataframe_cached(db)
     product_history = history[history["Product ID"] == product_id]
 
     live_rows = build_live_feature_row(product_history, horizon=actual_horizon)
@@ -110,7 +110,7 @@ def forecast_daily_rate_and_history_std(db: Session, product_id: str, lead_time_
     forecast_daily_rate = forecast["forecast_total_units"] / nearest_horizon
     forecast_lead_time_demand = forecast_daily_rate * lead_time_days
 
-    history = get_full_history_dataframe(db)
+    history = get_full_history_dataframe_cached(db)
     product_history = history[history["Product ID"] == product_id]
     daily_totals = product_history.groupby("Date")["Units Sold"].sum()
     demand_std = float(daily_totals.std())

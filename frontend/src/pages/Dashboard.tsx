@@ -1,64 +1,255 @@
 // frontend/src/pages/Dashboard.tsx
 
+import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useApi } from "../hooks/useApi";
-import { getProducts, getLowStock, getStockoutRiskList, getSalesByCategory, getTopProducts } from "../services/api";
+import { useLiveStream } from "../hooks/useLiveStream";
+import { ApiError, getDashboardSummary, getLiveSummary, runSimulatorTick, startSimulator, stopSimulator } from "../services/api";
+import type { LiveSummary } from "../types/live";
+import PageHeader from "../components/PageHeader";
+import Card from "../components/Card";
 import StatCard from "../components/StatCard";
-import { LoadingState, ErrorState } from "../components/LoadingError";
+import LiveFeedPanel from "../components/LiveFeedPanel";
+import LiveAlertsPanel from "../components/LiveAlertsPanel";
+import AlertDigestPanel from "../components/AlertDigestPanel";
+import NeedsAttentionPanel from "../components/NeedsAttentionPanel";
 
 export default function Dashboard() {
-  const products = useApi(() => getProducts(), []);
-  const lowStock = useApi(() => getLowStock(), []);
-  const atRisk = useApi(() => getStockoutRiskList(true), []);
-  const categorySales = useApi(() => getSalesByCategory(), []);
-  const topProducts = useApi(() => getTopProducts(5), []);
+  // Tier A: the whole page comes from ONE request. It used to be five, and the
+  // page blocked on all of them before rendering anything.
+  const summaryQuery = useApi(() => getDashboardSummary(), []);
 
-  const anyLoading = [products, lowStock, atRisk, categorySales, topProducts].some((q) => q.loading);
-  const firstError = [products, lowStock, atRisk, categorySales, topProducts].find((q) => q.error)?.error;
+  // --- Real-time layer (Tier 1) ---
+  const live = useLiveStream(10);
+  const [liveSummary, setLiveSummary] = useState<LiveSummary | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [busyAlertId, setBusyAlertId] = useState<number | null>(null);
+  const [liveError, setLiveError] = useState<string | null>(null);
 
-  if (anyLoading) return <LoadingState label="Loading dashboard..." />;
-  if (firstError) return <ErrorState message={firstError} />;
+  const refreshSummary = useCallback(async () => {
+    try {
+      setLiveSummary(await getLiveSummary());
+      setLiveError(null);
+    } catch (err) {
+      setLiveError(err instanceof ApiError ? err.message : "Live metrics are unavailable.");
+    }
+  }, []);
 
-  const highRiskCount = atRisk.data?.filter((r) => r.risk === "HIGH").length ?? 0;
+  useEffect(() => {
+    void refreshSummary();
+  }, [refreshSummary]);
 
+  const runAction = useCallback(
+    async (label: string, action: () => Promise<unknown>) => {
+      setBusyAction(label);
+      try {
+        await action();
+        await refreshSummary();
+      } catch (err) {
+        setLiveError(err instanceof ApiError ? err.message : "That action failed. Please try again.");
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [refreshSummary]
+  );
+
+  const handleTick = useCallback(() => runAction("tick", () => runSimulatorTick(3)), [runAction]);
+
+  const handleAcknowledge = useCallback(
+    async (alertId: number) => {
+      setBusyAlertId(alertId);
+      try {
+        await live.acknowledge(alertId);
+        await refreshSummary();
+      } catch (err) {
+        setLiveError(err instanceof ApiError ? err.message : "Could not acknowledge that alert.");
+      } finally {
+        setBusyAlertId(null);
+      }
+    },
+    [live, refreshSummary]
+  );
+
+  // Tier A: only a hard failure blanks the page. While the summary is in
+  // flight each section below renders its own loading state, so the page fills
+  // in progressively instead of showing one spinner for everything.
+  const summary = summaryQuery.data;
+  const { loading: summaryLoading, error: summaryError } = summaryQuery;
+
+  const criticalAlerts = live.alerts.filter((alert) => alert.severity === "CRITICAL").length;
+  const highRiskCount = summary?.risk_counts.high ?? 0;
+  const simulatorRunning = liveSummary?.simulator.running ?? false;
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">Dashboard</h1>
+      <PageHeader
+        title="Dashboard"
+        subtitle={
+          summary
+            ? `Inventory intelligence across ${summary.product_count} products and ${summary.store_count} stores${summary.as_of_date ? `, as of ${summary.as_of_date}` : ""}.`
+            : "Today's inventory health at a glance — what needs attention, top sellers, and live operations."
+        }
+        actions={
+          summary ? (
+            <span
+              className="rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs text-gray-500"
+              title={
+                summary.served_from_cache
+                  ? "Risk figures were served from the server's in-process cache."
+                  : "Risk figures were recomputed for this request."
+              }
+            >
+              summary in {summary.compute_ms} ms{summary.served_from_cache ? " · cached" : ""}
+            </span>
+          ) : null
+        }
+      />
+
+      {/* Tier B: the "what do I do first" block, at the very top. */}
+      <NeedsAttentionPanel
+        items={summary?.needs_attention ?? []}
+        loading={summaryLoading}
+        error={summaryError}
+        asOfDate={summary?.as_of_date ?? null}
+        criticalAlerts={live.alerts.filter((a) => a.severity === "CRITICAL")}
+      />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Total Products" value={products.data?.count ?? 0} />
-        <StatCard label="Total Units Sold (all time)" value={(topProducts.data?.products.reduce((a, p) => a + p.total_units_sold, 0) ?? 0).toLocaleString()} />
-        <StatCard label="Low Stock Items" value={lowStock.data?.count ?? 0} accent={lowStock.data && lowStock.data.count > 0 ? "warning" : "default"} />
-        <StatCard label="High Stockout Risk" value={highRiskCount} accent={highRiskCount > 0 ? "danger" : "default"} />
+        <StatCard
+          label="Total Products"
+          value={summary?.product_count ?? 0}
+          hint={`Across ${summary?.store_count ?? 0} stores`}
+        />
+        <StatCard
+          label="Units on Hand"
+          value={(summary?.total_inventory_units ?? 0).toLocaleString()}
+          hint="Latest inventory date"
+        />
+        <StatCard
+          label="Low Stock Items"
+          value={summary?.low_stock_count ?? 0}
+          hint={`Under ${summary?.low_stock_threshold ?? 50} units`}
+          accent={summary && summary.low_stock_count > 0 ? "warning" : "success"}
+        />
+        <StatCard
+          label="At Stockout Risk"
+          value={highRiskCount}
+          hint={
+            summary && summary.risk_counts.medium > 0
+              ? `+${summary.risk_counts.medium} medium risk`
+              : "All clear"
+          }
+          accent={highRiskCount > 0 ? "danger" : "success"}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="rounded-lg border bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-sm font-medium text-gray-600">Top 5 Products by Units Sold</h2>
+        <Card
+          title="Top 5 Products by Units Sold"
+          subtitle="All-time best sellers"
+          actions={
+            <a href="/sales" className="text-xs font-medium text-brand-700 hover:underline">
+              View all sales →
+            </a>
+          }
+        >
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={topProducts.data?.products ?? []}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="product_id" fontSize={12} />
-              <YAxis fontSize={12} />
-              <Tooltip />
-              <Bar dataKey="total_units_sold" fill="#2563eb" radius={[4, 4, 0, 0]} />
+            <BarChart data={summary?.top_products ?? []}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="product_id" fontSize={12} tickLine={false} axisLine={{ stroke: "#e5e7eb" }} />
+              <YAxis fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v: number) => v.toLocaleString()} />
+              <Tooltip formatter={(v) => [`${Number(v).toLocaleString()} units`, "Sold"]} cursor={{ fill: "#eff6ff" }} />
+              <Bar dataKey="total_units_sold" fill="#2563eb" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+        </Card>
+
+        <Card
+          title="Sales by Category"
+          subtitle="Units sold per category"
+          actions={
+            <a href="/sales" className="text-xs font-medium text-brand-700 hover:underline">
+              Break it down →
+            </a>
+          }
+        >
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={summary?.category_sales ?? []}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="category" fontSize={12} tickLine={false} axisLine={{ stroke: "#e5e7eb" }} />
+              <YAxis fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v: number) => v.toLocaleString()} />
+              <Tooltip formatter={(v) => [`${Number(v).toLocaleString()} units`, "Sold"]} cursor={{ fill: "#f0fdf4" }} />
+              <Bar dataKey="total_units_sold" fill="#16a34a" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+      </div>
+
+      <section id="live-operations" className="scroll-mt-4 space-y-4">
+        <PageHeader
+          title="Live operations"
+          subtitle={`Synthetic sales events streamed from the demo simulator, with proactive stockout alerts.${liveSummary ? ` Tick interval: ${liveSummary.simulator.tick_seconds}s.` : ""}`}
+        />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleTick}
+              disabled={busyAction !== null}
+              className="rounded-lg border border-brand-600 px-3 py-1.5 text-sm font-medium text-brand-700 transition-colors hover:bg-brand-50 disabled:opacity-50"
+            >
+              {busyAction === "tick" ? "Simulating..." : "Simulate one tick"}
+            </button>
+            <button
+              type="button"
+              onClick={() => runAction("start", () => startSimulator(3))}
+              disabled={busyAction !== null || simulatorRunning}
+              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:opacity-50"
+            >
+              {simulatorRunning ? "● Streaming..." : "Start live stream"}
+            </button>
+            <button
+              type="button"
+              onClick={() => runAction("stop", () => stopSimulator())}
+              disabled={busyAction !== null || !simulatorRunning}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+            >
+              Stop
+            </button>
+          </div>
+
+        {liveError && (
+          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{liveError}</p>
+        )}
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Live Units (this session)" value={live.unitsSold.toLocaleString()} hint="Since page load" />
+          <StatCard label="Live Events (all time)" value={liveSummary?.live_events ?? 0} hint="Simulator history" />
+          <StatCard
+            label="Open Alerts"
+            value={live.alerts.length}
+            hint={live.alerts.length > 0 ? "Needs review" : "All clear"}
+            accent={live.alerts.length > 0 ? "warning" : "success"}
+          />
+          <StatCard
+            label="Critical Alerts"
+            value={criticalAlerts}
+            hint={criticalAlerts > 0 ? "Act now" : "None critical"}
+            accent={criticalAlerts > 0 ? "danger" : "success"}
+          />
         </div>
 
-        <div className="rounded-lg border bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-sm font-medium text-gray-600">Sales by Category</h2>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={categorySales.data ?? []}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="category" fontSize={12} />
-              <YAxis fontSize={12} />
-              <Tooltip />
-              <Bar dataKey="total_units_sold" fill="#55a868" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <Card title="Live sales feed" subtitle={live.connected ? "Streaming live" : "Reconnecting..."}>
+            <LiveFeedPanel events={live.events} connected={live.connected} onTick={handleTick} busy={busyAction === "tick"} />
+          </Card>
+
+          <Card title="Proactive stockout alerts" subtitle={`${live.alerts.length} open`}>
+            <LiveAlertsPanel alerts={live.alerts} onAcknowledge={handleAcknowledge} busyAlertId={busyAlertId} />
+          </Card>
         </div>
-      </div>
+
+        <AlertDigestPanel />
+      </section>
     </div>
   );
 }
