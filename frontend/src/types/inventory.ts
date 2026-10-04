@@ -40,3 +40,16 @@ export interface LowStockResponse {
   items: LowStockItem[];
   count: number;
 }
+export interface StockMovement {
+  id: number;
+  occurred_at: string;
+  business_date: string;
+  store_id: string;
+  product_id: string;
+  movement_type: string;
+  quantity_delta: number;
+  quantity_before: number;
+  quantity_after: number;
+  reason: string;
+  source: string;
+}

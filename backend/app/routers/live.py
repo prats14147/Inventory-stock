@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSock
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.repositories import realtime_repository
 from app.services import simulator_service
 from app.services.live_hub import get_live_hub
@@ -234,7 +234,7 @@ async def live_ws(
 
 async def _send_backlog(websocket: WebSocket, backlog: int) -> None:
     """Best-effort replay of recent events/alerts on connect."""
-    db: Session = next(get_db())
+    db: Session = SessionLocal()
     try:
         for event in realtime_repository.get_recent_events(db, backlog):
             await websocket.send_json({"type": "sales_event", **event.to_dict()})
