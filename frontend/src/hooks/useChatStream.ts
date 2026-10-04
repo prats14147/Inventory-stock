@@ -12,7 +12,7 @@
 // authoritative and is what the transcript keeps (see routers/ws.py).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { chatStreamUrl, postChat } from "../services/api";
+import { chatStreamUrl, postChat, websocketProtocols } from "../services/api";
 import type { ChatStreamFrame } from "../types/live";
 import type { ChatResponse, Entities, Intent } from "../types/chat";
 
@@ -66,7 +66,7 @@ export function useChatStream(initialSessionId: string | null = null): ChatStrea
 
     const open = () => {
       if (cancelled) return;
-      const socket = new WebSocket(chatStreamUrl(sessionIdRef.current));
+      const socket = new WebSocket(chatStreamUrl(sessionIdRef.current), websocketProtocols());
       socketRef.current = socket;
 
       socket.onopen = () => {

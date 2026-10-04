@@ -49,6 +49,7 @@ from app.nlp.intent import Intent
 from app.nlp.llm_client import GroqClient
 from app.schemas.conversation import WSChatMessage, WSError
 from app.services import chat_service
+from app.security import require_websocket_identity
 
 router = APIRouter(tags=["chat-ws"])
 log = logging.getLogger("ws")
@@ -71,7 +72,10 @@ async def chat_ws(
     user_id: Optional[str] = Query(default=None),
 ) -> None:
     """Bidirectional chat with per-turn progress and token streaming."""
-    await websocket.accept()
+    if require_websocket_identity(websocket) is None:
+        await websocket.close(code=1008, reason="Sign-in required")
+        return
+    await websocket.accept(subprotocol="inventoryai")
 
     manager = chat_service.get_chat_session_manager(_resolve_llm_client())
     session = manager._get_or_create_session(session_id, user_id)

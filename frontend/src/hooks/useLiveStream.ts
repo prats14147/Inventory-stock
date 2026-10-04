@@ -7,7 +7,7 @@
 // transport if websockets are unavailable.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { acknowledgeAlert as acknowledgeAlertRequest, liveStreamUrl } from "../services/api";
+import { acknowledgeAlert as acknowledgeAlertRequest, liveStreamUrl, websocketProtocols } from "../services/api";
 import type { LiveFrame, LiveSalesEvent, StockoutAlert } from "../types/live";
 
 const MAX_EVENTS = 25;
@@ -40,7 +40,7 @@ export function useLiveStream(backlog = 10): LiveStream {
 
     const open = () => {
       if (cancelled) return;
-      const socket = new WebSocket(`${liveStreamUrl()}?backlog=${backlog}`);
+      const socket = new WebSocket(`${liveStreamUrl()}?backlog=${backlog}`, websocketProtocols());
       socketRef.current = socket;
 
       socket.onopen = () => {

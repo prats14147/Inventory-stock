@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.routers import (
+    auth,
     chat,
     dashboard,
     forecast,
@@ -37,6 +38,7 @@ from app.routers import (
 )
 from app.services import simulator_service
 from app.services.errors import InvalidRequestError, NotFoundError
+from app.security import require_request_identity, unauthorized
 
 settings = get_settings()
 
@@ -66,19 +68,32 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Dev-friendly CORS. allow_credentials is deliberately False: this app
-# uses no cookie-based auth, and allow_credentials=True combined with a
-# wildcard origin is a contradictory CORS configuration per the spec
-# (browsers forbid it) -- it was caught during Phase 10 integration
-# testing producing inconsistent headers between simple and preflight
-# requests. Tighten allow_origins before any real deployment.
+allowed_origins = [origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()]
+if not allowed_origins or "*" in allowed_origins:
+    raise RuntimeError("CORS_ALLOWED_ORIGINS must list specific trusted website origins; '*' is not allowed.")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def protect_api(request: Request, call_next):
+    # Health remains public for readiness probes, and login must be reachable
+    # before a browser has a token. All other API data requires sign-in.
+    public_paths = {"/api/health", "/api/auth/login"}
+    if request.url.path.startswith("/api/") and request.url.path not in public_paths and request.method != "OPTIONS":
+        if require_request_identity(request) is None:
+            exc = unauthorized()
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers,
+            )
+    return await call_next(request)
 
 
 @app.exception_handler(NotFoundError)
@@ -98,6 +113,7 @@ def unhandled_exception_handler(request: Request, exc: Exception) -> JSONRespons
 
 
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(products.router)
 app.include_router(inventory.router)
 app.include_router(sales.router)

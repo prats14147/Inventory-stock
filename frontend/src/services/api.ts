@@ -25,6 +25,19 @@ import type { DashboardSummary } from "../types/dashboard";
 // localhost to IPv6 (::1) while uvicorn is bound to IPv4 only, which looks
 // like "the API is down" even when the backend is running.
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const AUTH_TOKEN_KEY = "inventoryai:access_token";
+
+export function getAccessToken(): string | null {
+  return typeof sessionStorage === "undefined" ? null : sessionStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+export function setAccessToken(token: string | null): void {
+  if (typeof sessionStorage !== "undefined") {
+    if (token) sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+    else sessionStorage.removeItem(AUTH_TOKEN_KEY);
+  }
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("inventoryai:auth-changed"));
+}
 
 export class ApiError extends Error {
   status: number;
@@ -37,10 +50,14 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   let res: Response;
+  const headers = new Headers(options?.headers);
+  headers.set("Content-Type", "application/json");
+  const token = getAccessToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
   try {
     res = await fetch(`${API_BASE_URL}${path}`, {
-      headers: { "Content-Type": "application/json" },
       ...options,
+      headers,
     });
   } catch {
     throw new ApiError(
@@ -49,6 +66,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     );
   }
   if (!res.ok) {
+    if (res.status === 401 && path !== "/api/auth/login") setAccessToken(null);
     let detail = res.statusText;
     try {
       const body = await res.json();
@@ -60,6 +78,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
   return res.json() as Promise<T>;
 }
+
+export const signIn = (username: string, password: string) =>
+  request<{ access_token: string; token_type: string; expires_in: number }>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+
+export const getCurrentUser = () => request<{ username: string }>("/api/auth/me");
 
 function qs(params: Record<string, string | number | boolean | undefined>): string {
   const filtered = Object.entries(params).filter(([, v]) => v !== undefined && v !== "");
@@ -230,6 +256,13 @@ export const unpinProduct = (productId: string) =>
  */
 export const liveStreamUrl = () => `${API_BASE_URL.replace(/^http/, "ws")}/api/live/ws`;
 export const chatStreamUrl = (sessionId?: string | null) => {
-  const base = `${API_BASE_URL.replace(/^http/, "ws")}/api/chat/ws`;
-  return sessionId ? `${base}?session_id=${encodeURIComponent(sessionId)}` : base;
+  const params = new URLSearchParams();
+  if (sessionId) params.set("session_id", sessionId);
+  const query = params.toString();
+  return `${API_BASE_URL.replace(/^http/, "ws")}/api/chat/ws${query ? `?${query}` : ""}`;
+};
+
+export const websocketProtocols = () => {
+  const token = getAccessToken();
+  return token ? ["inventoryai", `bearer.${token}`] : ["inventoryai"];
 };

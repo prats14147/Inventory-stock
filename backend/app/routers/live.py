@@ -31,6 +31,7 @@ from app.database import get_db
 from app.repositories import realtime_repository
 from app.services import simulator_service
 from app.services.live_hub import get_live_hub
+from app.security import require_websocket_identity
 
 router = APIRouter(tags=["live"])
 log = logging.getLogger("live")
@@ -200,7 +201,10 @@ async def live_ws(
     backlog: int = Query(10, ge=0, le=100),
 ) -> None:
     """Stream live sales events and alerts as they happen."""
-    await websocket.accept()
+    if require_websocket_identity(websocket) is None:
+        await websocket.close(code=1008, reason="Sign-in required")
+        return
+    await websocket.accept(subprotocol="inventoryai")
     hub = get_live_hub()
 
     async with hub.subscribe() as queue:

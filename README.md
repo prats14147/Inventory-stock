@@ -211,6 +211,26 @@ Layered as `Router -> Service -> Repository -> Database`.
 
 ## Installation
 
+### Start the full app on Windows
+
+After the first-time setup below is complete, open PowerShell in the project
+folder and run:
+
+```powershell
+.\start_inventoryai.ps1
+```
+
+The script checks PostgreSQL (and asks Docker Compose to start it if Docker is
+available), applies any pending schema migrations, then starts the API and
+website. It waits for the API health endpoint before reporting success. Open
+`http://127.0.0.1:5173`; run `.\stop_inventoryai.ps1` to stop the API and
+website started by the script. PostgreSQL stays running so the database
+persists. Logs are saved under `.runtime/`.
+
+The script does **not** clean, reload, or train the sample data. On a brand-new
+database, complete the one-time clean/load/train steps below first. This avoids
+overwriting products, stock changes, or sales you have entered.
+
 ### Prerequisites
 - Python 3.11+ (developed/tested against 3.12)
 - Node.js 18+ (for the frontend, Phase 9)
@@ -270,6 +290,23 @@ anything needs adjusting.
 
 ## Environment Variables
 See `.env.example` for the full list with comments.
+
+### Sign-in and deployment safety
+
+The API now requires a bearer token for `/api/*` data routes (except the
+health check and sign-in endpoint). The website shows a sign-in page, and
+tokens expire after the configured lifetime. The starter setup has one
+deployment-configured operator account; it does not provide user registration
+or per-user roles yet. Keep the username/password and token secret in the
+server's untracked `.env` (fill in the three blank `AUTH_*` fields before
+signing in), and set `CORS_ALLOWED_ORIGINS` to the exact trusted
+website origin(s), comma-separated. The API rejects `*`.
+
+Before exposing the app online, use HTTPS, strong unique credentials, and a
+random `AUTH_TOKEN_SECRET` of at least 32 characters. Do not commit `.env` or
+share a common login with people who should have different permissions. For
+multiple staff accounts and separate read-only/editor/admin roles, add a user
+table and account-management workflow as the next step.
 
 ## Running the Application
 ```bash

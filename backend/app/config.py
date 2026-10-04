@@ -6,12 +6,19 @@ Centralized configuration. All values come from environment variables
 """
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Resolve the project-level .env independently of the current directory.
+    # The API and migration commands run from backend/, while the file lives
+    # at the repository root.
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parents[2] / ".env",
+        extra="ignore",
+    )
 
     # Database
     database_url: str = "postgresql+psycopg2://inventory_user:inventory_pass@localhost:5432/inventory_db"
@@ -42,6 +49,12 @@ class Settings(BaseSettings):
     # App
     environment: str = "development"
     log_level: str = "INFO"
+    # Set distinct, private values before exposing the API on a network.
+    auth_admin_username: str = ""
+    auth_admin_password: str = ""
+    auth_token_secret: str = ""
+    auth_token_ttl_minutes: int = 60
+    cors_allowed_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
 
     # Real-time layer (Tier 1 demo). The simulator is OFF by default: it is a
     # demo device, not a data source, and nothing in the analytical path may

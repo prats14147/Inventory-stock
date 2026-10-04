@@ -16,7 +16,7 @@ const links = [
   { to: "/chat", label: "Chatbot" },
 ];
 
-export default function Nav() {
+export default function Nav({ onSignOut }: { onSignOut: () => void }) {
   return (
     <nav className="sticky top-0 z-10 border-b border-gray-200 bg-white/95 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center gap-1 overflow-x-auto px-4 py-3">
@@ -42,6 +42,7 @@ export default function Nav() {
             {link.label}
           </NavLink>
         ))}
+        <button onClick={onSignOut} className="ml-auto shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900">Sign out</button>
       </div>
     </nav>
   );
