@@ -21,7 +21,10 @@ import type { LiveSalesEvent, LiveSummary, SimulatorStatus, StockoutAlert } from
 import type { AlertDigest, WatchlistEntry, WatchlistListResponse } from "../types/watchlist";
 import type { DashboardSummary } from "../types/dashboard";
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+// Prefer 127.0.0.1 over "localhost": on macOS the browser often resolves
+// localhost to IPv6 (::1) while uvicorn is bound to IPv4 only, which looks
+// like "the API is down" even when the backend is running.
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 export class ApiError extends Error {
   status: number;
@@ -33,10 +36,18 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch {
+    throw new ApiError(
+      0,
+      `Cannot reach the InventoryAI API at ${API_BASE_URL}. Start the backend (python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000) and PostgreSQL, then reload this page.`
+    );
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {

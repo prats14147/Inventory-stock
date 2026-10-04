@@ -1,18 +1,18 @@
-2026-10-01 15:01:34,591 [INFO] Loading raw data from /home/anusha/Desktop/inventory-intelligence/data/raw/retail_store_inventory.csv
-2026-10-01 15:01:34,906 [INFO] Loaded 73100 rows, 15 columns
-2026-10-01 15:01:34,941 [INFO] Converted Date to datetime. Range: 2022-01-01 00:00:00 to 2024-01-01 00:00:00
-2026-10-01 15:01:34,949 [INFO] No missing values found.
-2026-10-01 15:01:35,001 [INFO] No fully duplicate rows found.
-2026-10-01 15:01:35,012 [INFO] (Date, Store ID, Product ID) is unique across all rows, as expected.
-2026-10-01 15:01:35,014 [INFO] Inventory Level: no negative values.
-2026-10-01 15:01:35,014 [INFO] Units Sold: no negative values.
-2026-10-01 15:01:35,014 [INFO] Units Ordered: no negative values.
-2026-10-01 15:01:35,015 [INFO] Price: no negative values.
-2026-10-01 15:01:35,016 [INFO] Discount: all values within [0, 100].
-2026-10-01 15:01:35,017 [INFO] Holiday/Promotion: all values in {0, 1}.
-2026-10-01 15:01:35,018 [INFO] Demand Forecast < 0: 673 rows (0.92%) -- clipping to 0. This column is reference-only and will NOT be used as a model feature.
-2026-10-01 15:01:35,019 [INFO] Units Sold >= Inventory Level: 369 rows (0.505%) -- flagged via new column 'possible_stock_constrained', values NOT altered. See docs/limitations.md for interpretation.
-2026-10-01 15:01:35,023 [INFO] Category: all values within expected set {'Groceries', 'Furniture', 'Toys', 'Clothing', 'Electronics'}
-2026-10-01 15:01:35,026 [INFO] Region: all values within expected set {'West', 'North', 'South', 'East'}
-2026-10-01 15:01:35,064 [INFO] Cleaning complete. Rows: 73100 -> 73100
-2026-10-01 15:01:35,780 [INFO] Wrote cleaned dataset to /home/anusha/Desktop/inventory-intelligence/data/processed/cleaned_inventory.csv (73100 rows)
+2026-10-03 21:59:00,683 [INFO] Loading raw data from /Users/aayushmashrestha/Desktop/NLP/Inventory-stock/data/raw/retail_store_inventory.csv
+2026-10-03 21:59:00,774 [INFO] Loaded 73100 rows, 15 columns
+2026-10-03 21:59:00,790 [INFO] Converted Date to datetime. Range: 2022-01-01 00:00:00 to 2024-01-01 00:00:00
+2026-10-03 21:59:00,802 [INFO] No missing values found.
+2026-10-03 21:59:00,824 [INFO] No fully duplicate rows found.
+2026-10-03 21:59:00,828 [INFO] (Date, Store ID, Product ID) is unique across all rows, as expected.
+2026-10-03 21:59:00,828 [INFO] Inventory Level: no negative values.
+2026-10-03 21:59:00,828 [INFO] Units Sold: no negative values.
+2026-10-03 21:59:00,829 [INFO] Units Ordered: no negative values.
+2026-10-03 21:59:00,829 [INFO] Price: no negative values.
+2026-10-03 21:59:00,829 [INFO] Discount: all values within [0, 100].
+2026-10-03 21:59:00,829 [INFO] Holiday/Promotion: all values in {0, 1}.
+2026-10-03 21:59:00,830 [INFO] Demand Forecast < 0: 673 rows (0.92%) -- clipping to 0. This column is reference-only and will NOT be used as a model feature.
+2026-10-03 21:59:00,830 [INFO] Units Sold >= Inventory Level: 369 rows (0.505%) -- flagged via new column 'possible_stock_constrained', values NOT altered. See docs/limitations.md for interpretation.
+2026-10-03 21:59:00,832 [INFO] Category: all values within expected set {'Groceries', 'Electronics', 'Toys', 'Clothing', 'Furniture'}
+2026-10-03 21:59:00,834 [INFO] Region: all values within expected set {'South', 'West', 'East', 'North'}
+2026-10-03 21:59:00,900 [INFO] Cleaning complete. Rows: 73100 -> 73100
+2026-10-03 21:59:01,196 [INFO] Wrote cleaned dataset to /Users/aayushmashrestha/Desktop/NLP/Inventory-stock/data/processed/cleaned_inventory.csv (73100 rows)

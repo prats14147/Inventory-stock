@@ -1,17 +1,11 @@
 // frontend/src/pages/Dashboard.tsx
 
-import { useCallback, useEffect, useState } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { useApi } from "../hooks/useApi";
-import { useLiveStream } from "../hooks/useLiveStream";
-import { ApiError, getDashboardSummary, getLiveSummary, runSimulatorTick, startSimulator, stopSimulator } from "../services/api";
-import type { LiveSummary } from "../types/live";
+import { getDashboardSummary } from "../services/api";
 import PageHeader from "../components/PageHeader";
 import Card from "../components/Card";
 import StatCard from "../components/StatCard";
-import LiveFeedPanel from "../components/LiveFeedPanel";
-import LiveAlertsPanel from "../components/LiveAlertsPanel";
-import AlertDigestPanel from "../components/AlertDigestPanel";
 import NeedsAttentionPanel from "../components/NeedsAttentionPanel";
 
 export default function Dashboard() {
@@ -19,67 +13,13 @@ export default function Dashboard() {
   // page blocked on all of them before rendering anything.
   const summaryQuery = useApi(() => getDashboardSummary(), []);
 
-  // --- Real-time layer (Tier 1) ---
-  const live = useLiveStream(10);
-  const [liveSummary, setLiveSummary] = useState<LiveSummary | null>(null);
-  const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [busyAlertId, setBusyAlertId] = useState<number | null>(null);
-  const [liveError, setLiveError] = useState<string | null>(null);
-
-  const refreshSummary = useCallback(async () => {
-    try {
-      setLiveSummary(await getLiveSummary());
-      setLiveError(null);
-    } catch (err) {
-      setLiveError(err instanceof ApiError ? err.message : "Live metrics are unavailable.");
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshSummary();
-  }, [refreshSummary]);
-
-  const runAction = useCallback(
-    async (label: string, action: () => Promise<unknown>) => {
-      setBusyAction(label);
-      try {
-        await action();
-        await refreshSummary();
-      } catch (err) {
-        setLiveError(err instanceof ApiError ? err.message : "That action failed. Please try again.");
-      } finally {
-        setBusyAction(null);
-      }
-    },
-    [refreshSummary]
-  );
-
-  const handleTick = useCallback(() => runAction("tick", () => runSimulatorTick(3)), [runAction]);
-
-  const handleAcknowledge = useCallback(
-    async (alertId: number) => {
-      setBusyAlertId(alertId);
-      try {
-        await live.acknowledge(alertId);
-        await refreshSummary();
-      } catch (err) {
-        setLiveError(err instanceof ApiError ? err.message : "Could not acknowledge that alert.");
-      } finally {
-        setBusyAlertId(null);
-      }
-    },
-    [live, refreshSummary]
-  );
-
   // Tier A: only a hard failure blanks the page. While the summary is in
   // flight each section below renders its own loading state, so the page fills
   // in progressively instead of showing one spinner for everything.
   const summary = summaryQuery.data;
   const { loading: summaryLoading, error: summaryError } = summaryQuery;
 
-  const criticalAlerts = live.alerts.filter((alert) => alert.severity === "CRITICAL").length;
   const highRiskCount = summary?.risk_counts.high ?? 0;
-  const simulatorRunning = liveSummary?.simulator.running ?? false;
   return (
     <div className="space-y-6">
       <PageHeader
@@ -87,7 +27,7 @@ export default function Dashboard() {
         subtitle={
           summary
             ? `Inventory intelligence across ${summary.product_count} products and ${summary.store_count} stores${summary.as_of_date ? `, as of ${summary.as_of_date}` : ""}.`
-            : "Today's inventory health at a glance — what needs attention, top sellers, and live operations."
+            : "Today's inventory health at a glance — what needs attention and top sellers."
         }
         actions={
           summary ? (
@@ -111,7 +51,6 @@ export default function Dashboard() {
         loading={summaryLoading}
         error={summaryError}
         asOfDate={summary?.as_of_date ?? null}
-        criticalAlerts={live.alerts.filter((a) => a.severity === "CRITICAL")}
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -184,72 +123,6 @@ export default function Dashboard() {
           </ResponsiveContainer>
         </Card>
       </div>
-
-      <section id="live-operations" className="scroll-mt-4 space-y-4">
-        <PageHeader
-          title="Live operations"
-          subtitle={`Synthetic sales events streamed from the demo simulator, with proactive stockout alerts.${liveSummary ? ` Tick interval: ${liveSummary.simulator.tick_seconds}s.` : ""}`}
-        />
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handleTick}
-              disabled={busyAction !== null}
-              className="rounded-lg border border-brand-600 px-3 py-1.5 text-sm font-medium text-brand-700 transition-colors hover:bg-brand-50 disabled:opacity-50"
-            >
-              {busyAction === "tick" ? "Simulating..." : "Simulate one tick"}
-            </button>
-            <button
-              type="button"
-              onClick={() => runAction("start", () => startSimulator(3))}
-              disabled={busyAction !== null || simulatorRunning}
-              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:opacity-50"
-            >
-              {simulatorRunning ? "● Streaming..." : "Start live stream"}
-            </button>
-            <button
-              type="button"
-              onClick={() => runAction("stop", () => stopSimulator())}
-              disabled={busyAction !== null || !simulatorRunning}
-              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-            >
-              Stop
-            </button>
-          </div>
-
-        {liveError && (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">{liveError}</p>
-        )}
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Live Units (this session)" value={live.unitsSold.toLocaleString()} hint="Since page load" />
-          <StatCard label="Live Events (all time)" value={liveSummary?.live_events ?? 0} hint="Simulator history" />
-          <StatCard
-            label="Open Alerts"
-            value={live.alerts.length}
-            hint={live.alerts.length > 0 ? "Needs review" : "All clear"}
-            accent={live.alerts.length > 0 ? "warning" : "success"}
-          />
-          <StatCard
-            label="Critical Alerts"
-            value={criticalAlerts}
-            hint={criticalAlerts > 0 ? "Act now" : "None critical"}
-            accent={criticalAlerts > 0 ? "danger" : "success"}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <Card title="Live sales feed" subtitle={live.connected ? "Streaming live" : "Reconnecting..."}>
-            <LiveFeedPanel events={live.events} connected={live.connected} onTick={handleTick} busy={busyAction === "tick"} />
-          </Card>
-
-          <Card title="Proactive stockout alerts" subtitle={`${live.alerts.length} open`}>
-            <LiveAlertsPanel alerts={live.alerts} onAcknowledge={handleAcknowledge} busyAlertId={busyAlertId} />
-          </Card>
-        </div>
-
-        <AlertDigestPanel />
-      </section>
     </div>
   );
 }

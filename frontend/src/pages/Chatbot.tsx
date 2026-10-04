@@ -158,7 +158,12 @@ export default function Chatbot() {
         setMessages((prev) => [...prev, { role: "assistant", text: response.message, response }]);
         void refreshSessions();
       } catch (err) {
-        const message = err instanceof ApiError ? err.message : "Something went wrong reaching the assistant.";
+        const message =
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "Something went wrong reaching the assistant.";
         setMessages((prev) => [...prev, { role: "assistant", text: message, failed: true }]);
       } finally {
         setLoading(false);

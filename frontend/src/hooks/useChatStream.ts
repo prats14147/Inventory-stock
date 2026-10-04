@@ -151,24 +151,36 @@ export function useChatStream(initialSessionId: string | null = null): ChatStrea
     };
   }, [generation]);
 
-  const sendMessage = useCallback(async (text: string): Promise<ChatResponse> => {
-    const socket = socketRef.current;
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      setStage(null);
-      setPendingText("");
-      return new Promise<ChatResponse>((resolve, reject) => {
-        pendingRef.current = { resolve, reject };
-        socket.send(JSON.stringify({ type: "chat", message: text }));
-      });
-    }
-
-    // Fallback transport: same verified payload, no incremental frames.
+  const sendViaRest = useCallback(async (text: string): Promise<ChatResponse> => {
     setTransport("rest");
     const response = await postChat(text, sessionIdRef.current);
     sessionIdRef.current = response.session_id;
     setSessionId(response.session_id);
     return response;
   }, []);
+
+  const sendMessage = useCallback(
+    async (text: string): Promise<ChatResponse> => {
+      const socket = socketRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        setStage(null);
+        setPendingText("");
+        try {
+          return await new Promise<ChatResponse>((resolve, reject) => {
+            pendingRef.current = { resolve, reject };
+            socket.send(JSON.stringify({ type: "chat", message: text }));
+          });
+        } catch {
+          // Socket dropped mid-turn or the server sent an error frame.
+          // REST returns the same verified payload.
+          return sendViaRest(text);
+        }
+      }
+
+      return sendViaRest(text);
+    },
+    [sendViaRest]
+  );
 
   const switchSession = useCallback((next: string | null) => {
     // Fail any in-flight turn -- it belongs to the old session.
