@@ -3,7 +3,12 @@
 // Single dedicated API service layer (spec section 44) -- components
 // never call fetch() directly, they call functions exported here.
 
-import type { CurrentInventoryRow, LowStockResponse, ProductInventoryResponse } from "../types/inventory";
+import type {
+  CurrentInventoryRow,
+  LowStockResponse,
+  ProductInventoryResponse,
+  StockMovement,
+} from "../types/inventory";
 import type {
   CategorySalesSummary,
   DailySaleRow,
@@ -115,7 +120,36 @@ export const getProductInventory = (productId: string) =>
   request<ProductInventoryResponse>(`/api/inventory/${productId}`);
 export const getLowStock = (threshold?: number) =>
   request<LowStockResponse>(`/api/inventory/low-stock${qs({ threshold })}`);
-
+export const getStockMovements = (
+  params: {
+    product_id?: string;
+    store_id?: string;
+    movement_type?: string;
+  } = {}
+) =>
+  request<StockMovement[]>(
+    `/api/sales/stock-movements${qs(params)}`
+  );
+export const adjustInventory = (payload: {
+  product_id: string;
+  store_id: string;
+  movement_type: "DELIVERY" | "RETURN" | "MANUAL_CORRECTION";
+  quantity_delta: number;
+  reason: string;
+}) =>
+  request<{
+    date: string;
+    product_id: string;
+    store_id: string;
+    movement_type: string;
+    quantity_delta: number;
+    quantity_before: number;
+    quantity_after: number;
+    reason: string;
+  }>("/api/inventory/adjust", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 // --- Sales ---
 export const getSales = (
   params: {

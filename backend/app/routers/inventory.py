@@ -1,13 +1,19 @@
 """backend/app/routers/inventory.py"""
 
-from datetime import date
+from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import DailyInventory, Product, Store
+from app.models.stock_movement import (
+    DELIVERY,
+    MANUAL_CORRECTION,
+    RETURN,
+    StockMovement,
+)
 from app.repositories import inventory_repository
 from app.schemas.inventory import (
     CurrentInventoryRow,
@@ -15,6 +21,8 @@ from app.schemas.inventory import (
     InventoryUpsertResponse,
     LowStockResponse,
     ProductInventoryResponse,
+    StockAdjustmentRequest,
+    StockAdjustmentResponse,
 )
 from app.services import inventory_service
 
@@ -29,9 +37,11 @@ def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_
     product = db.get(Product, payload.product_id)
     if product is None:
         db.add(Product(product_id=payload.product_id))
+
     store = db.get(Store, payload.store_id)
     if store is None:
         db.add(Store(store_id=payload.store_id))
+
     db.flush()
 
     row = db.execute(
@@ -41,7 +51,9 @@ def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_
             DailyInventory.store_id == payload.store_id,
         )
     ).scalar_one_or_none()
+
     created = row is None
+
     if row is None:
         row = DailyInventory(
             date=as_of,
@@ -53,15 +65,39 @@ def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_
             region=payload.region,
         )
         db.add(row)
+
     else:
-        row.inventory_level = payload.inventory_level
+        quantity_before = row.inventory_level
+        quantity_after = payload.inventory_level
+        quantity_delta = quantity_after - quantity_before
+
+        row.inventory_level = quantity_after
         row.units_ordered = payload.units_ordered
+
         if payload.category is not None:
             row.category = payload.category
+
         if payload.region is not None:
             row.region = payload.region
 
+        if quantity_delta != 0:
+            db.add(
+                StockMovement(
+                    occurred_at=datetime.now(),
+                    business_date=as_of,
+                    store_id=payload.store_id,
+                    product_id=payload.product_id,
+                    movement_type=MANUAL_CORRECTION,
+                    quantity_delta=quantity_delta,
+                    quantity_before=quantity_before,
+                    quantity_after=quantity_after,
+                    reason="Manual inventory correction",
+                    source="inventory_upsert",
+                )
+            )
+
     db.commit()
+
     return InventoryUpsertResponse(
         date=as_of,
         product_id=payload.product_id,
@@ -72,19 +108,114 @@ def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_
     )
 
 
+@router.post("/adjust", response_model=StockAdjustmentResponse)
+def adjust_inventory(
+    payload: StockAdjustmentRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Record a delivery, return, or manual stock correction.
+
+    DELIVERY and RETURN increase stock.
+    MANUAL_CORRECTION can increase or decrease stock.
+    """
+
+    allowed_types = {
+        DELIVERY,
+        RETURN,
+        MANUAL_CORRECTION,
+    }
+
+    if payload.movement_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "movement_type must be DELIVERY, RETURN, "
+                "or MANUAL_CORRECTION"
+            ),
+        )
+
+    if payload.quantity_delta == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="quantity_delta cannot be zero",
+        )
+
+    as_of = inventory_repository.get_latest_date(db) or date.today()
+
+    row = db.execute(
+        select(DailyInventory).where(
+            DailyInventory.date == as_of,
+            DailyInventory.product_id == payload.product_id,
+            DailyInventory.store_id == payload.store_id,
+        )
+    ).scalar_one_or_none()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Inventory record not found for this product and store",
+        )
+
+    quantity_before = row.inventory_level
+    quantity_after = quantity_before + payload.quantity_delta
+
+    if quantity_after < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Stock cannot become negative",
+        )
+
+    row.inventory_level = quantity_after
+
+    movement = StockMovement(
+        occurred_at=datetime.now(),
+        business_date=as_of,
+        store_id=payload.store_id,
+        product_id=payload.product_id,
+        movement_type=payload.movement_type,
+        quantity_delta=payload.quantity_delta,
+        quantity_before=quantity_before,
+        quantity_after=quantity_after,
+        reason=payload.reason,
+        source="inventory_adjustment",
+    )
+
+    db.add(movement)
+    db.commit()
+
+    return StockAdjustmentResponse(
+        date=as_of,
+        product_id=payload.product_id,
+        store_id=payload.store_id,
+        movement_type=payload.movement_type,
+        quantity_delta=payload.quantity_delta,
+        quantity_before=quantity_before,
+        quantity_after=quantity_after,
+        reason=payload.reason,
+    )
+
+
 @router.get("", response_model=list[CurrentInventoryRow])
 def list_current_inventory(
     category: str | None = None,
     region: str | None = None,
     db: Session = Depends(get_db),
 ):
-    rows = inventory_repository.get_all_current_inventory(db, category=category, region=region)
+    rows = inventory_repository.get_all_current_inventory(
+        db,
+        category=category,
+        region=region,
+    )
     return [CurrentInventoryRow(**row) for row in rows]
 
 
 @router.get("/low-stock", response_model=LowStockResponse)
 def low_stock(
-    threshold: int | None = Query(None, description="Override the default low-stock threshold"),
+    threshold: int | None = Query(
+        None,
+        description="Override the default low-stock threshold",
+    ),
     db: Session = Depends(get_db),
 ):
     return inventory_service.get_low_stock(db, threshold=threshold)
@@ -92,4 +223,7 @@ def low_stock(
 
 @router.get("/{product_id}", response_model=ProductInventoryResponse)
 def get_inventory(product_id: str, db: Session = Depends(get_db)):
-    return inventory_service.get_product_inventory(db, product_id)  # raises NotFoundError -> 404
+    return inventory_service.get_product_inventory(
+        db,
+        product_id,
+    )

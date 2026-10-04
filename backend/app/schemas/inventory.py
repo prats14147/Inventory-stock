@@ -83,3 +83,26 @@ class CurrentInventoryListResponse(BaseModel):
     as_of_date: date | None
     items: list[CurrentInventoryItem]
     count: int
+
+
+class StockAdjustmentRequest(BaseModel):
+    """Request to record a delivery, return, or manual stock correction."""
+
+    product_id: str = Field(min_length=1, max_length=20)
+    store_id: str = Field(min_length=1, max_length=20)
+    movement_type: str = Field(min_length=1, max_length=30)
+    quantity_delta: int
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class StockAdjustmentResponse(BaseModel):
+    """Result of a stock adjustment, including the before/after quantities."""
+
+    date: date
+    product_id: str
+    store_id: str
+    movement_type: str
+    quantity_delta: int
+    quantity_before: int
+    quantity_after: int
+    reason: str
