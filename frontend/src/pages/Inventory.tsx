@@ -1,9 +1,9 @@
 // frontend/src/pages/Inventory.tsx
 
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useApi } from "../hooks/useApi";
-import { getCurrentInventory } from "../services/api";
+import { ApiError, getCurrentInventory, saveInventory } from "../services/api";
 import { LoadingState, ErrorState } from "../components/LoadingError";
 import PageHeader from "../components/PageHeader";
 import Card from "../components/Card";
@@ -11,16 +11,18 @@ import EmptyState from "../components/EmptyState";
 import PinButton from "../components/PinButton";
 
 const CATEGORIES = ["Furniture", "Toys", "Clothing", "Groceries", "Electronics"];
+const REGIONS = ["North", "South", "East", "West"];
 const PAGE_SIZE = 20;
 
-type SortKey = "product_id" | "category" | "store_id" | "inventory_level" | "units_ordered";
+type SortKey = "product_id" | "category" | "region" | "store_id" | "inventory_level" | "units_ordered";
 type SortDir = "asc" | "desc";
 
 const COLUMNS: Array<{ key: SortKey; label: string; numeric?: boolean }> = [
   { key: "product_id", label: "Product" },
   { key: "category", label: "Category" },
+  { key: "region", label: "Region" },
   { key: "store_id", label: "Store" },
-  { key: "inventory_level", label: "Inventory", numeric: true },
+  { key: "inventory_level", label: "Stock on Hand", numeric: true },
   { key: "units_ordered", label: "Units Ordered", numeric: true },
 ];
 
@@ -31,6 +33,12 @@ export default function Inventory() {
   const [productFilter, setProductFilter] = useState(urlProduct);
   const [storeFilter, setStoreFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "low">("all");
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [formOpen, setFormOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+  const [form, setForm] = useState({ product_id: "", store_id: "", inventory_level: "", units_ordered: "0", category: "", region: "" });
 
   // Deep link (?product=P0001) wins on arrival and whenever the URL changes --
   // that is how the chat answer cards and the watchlist hand off to this page.
@@ -46,7 +54,52 @@ export default function Inventory() {
     setSearchParams(params, { replace: true });
   }
 
-  const { data, loading, error } = useApi(() => getCurrentInventory({ category: category || undefined }), [category]);
+  const { data, loading, error } = useApi(() => getCurrentInventory({ category: category || undefined }), [category, refreshKey]);
+
+  function beginAdd() {
+    setForm({ product_id: "", store_id: "", inventory_level: "", units_ordered: "0", category: "", region: "" });
+    setFormError("");
+    setSuccessMessage("");
+    setFormOpen(true);
+  }
+
+  function beginEdit(row: NonNullable<typeof data>[number]) {
+    setForm({
+      product_id: row.product_id,
+      store_id: row.store_id,
+      inventory_level: String(row.inventory_level),
+      units_ordered: String(row.units_ordered),
+      category: CATEGORIES.includes(row.category) ? row.category : "",
+      region: REGIONS.includes(row.region) ? row.region : "",
+    });
+    setFormError("");
+    setSuccessMessage("");
+    setFormOpen(true);
+  }
+
+  async function submitInventory(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setFormError("");
+    setSuccessMessage("");
+    try {
+      const result = await saveInventory({
+        product_id: form.product_id.trim(),
+        store_id: form.store_id.trim(),
+        inventory_level: Number(form.inventory_level),
+        units_ordered: Number(form.units_ordered),
+        category: form.category,
+        region: form.region,
+      });
+      setSuccessMessage(`${result.created ? "Stock record added" : "Stock updated"} for ${result.product_id} at ${result.store_id}.`);
+      setFormOpen(false);
+      setRefreshKey((key) => key + 1);
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : "Could not save this stock record. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   const rows = useMemo(() => {
     let filtered = data ?? [];
@@ -111,6 +164,57 @@ export default function Inventory() {
             : `${sorted.length} of ${(data ?? []).length} store-product combinations shown. Low means under 50 units.`
         }
       />
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-100 bg-brand-50 px-4 py-3">
+        <p className="text-sm text-gray-700">Add a product with its starting stock, or update stock for a product and store.</p>
+        <button type="button" onClick={beginAdd} className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700">
+          Add product / stock
+        </button>
+      </div>
+
+      {successMessage && <p role="status" className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-800">{successMessage}</p>}
+
+      {formOpen && (
+        <Card>
+          <form onSubmit={submitInventory} className="space-y-4">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">Add or edit stock</h2>
+              <p className="mt-1 text-sm text-gray-500">Category is the product group; region is the location group. Units ordered are incoming stock and are separate from stock on hand.</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+              <label className="space-y-1 text-sm font-medium text-gray-700">Product ID
+                <input required maxLength={20} value={form.product_id} onChange={(e) => setForm({ ...form, product_id: e.target.value })} placeholder="e.g. P0021" className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal" />
+              </label>
+              <label className="space-y-1 text-sm font-medium text-gray-700">Store ID
+                <input required maxLength={20} value={form.store_id} onChange={(e) => setForm({ ...form, store_id: e.target.value })} placeholder="e.g. S0001" className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal" />
+              </label>
+              <label className="space-y-1 text-sm font-medium text-gray-700">Stock on hand
+                <input required type="number" min="0" step="1" value={form.inventory_level} onChange={(e) => setForm({ ...form, inventory_level: e.target.value })} className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal" />
+              </label>
+              <label className="space-y-1 text-sm font-medium text-gray-700">Units ordered
+                <input required type="number" min="0" step="1" value={form.units_ordered} onChange={(e) => setForm({ ...form, units_ordered: e.target.value })} className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal" />
+              </label>
+              <label className="space-y-1 text-sm font-medium text-gray-700">Category
+                <select required value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal">
+                  <option value="" disabled>Select a category</option>
+                  {CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+              </label>
+              <label className="space-y-1 text-sm font-medium text-gray-700">Region
+                <select required value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal">
+                  <option value="" disabled>Select a region</option>
+                  {REGIONS.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+              </label>
+            </div>
+            {formError && <p role="alert" className="text-sm text-red-700">{formError}</p>}
+            <div className="flex gap-2">
+              <button disabled={saving} type="submit" className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">{saving ? "Saving…" : "Save stock"}</button>
+              <button type="button" onClick={() => setFormOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+            </div>
+          </form>
+        </Card>
+      )}
 
       <Card>
         <div className="mb-4 flex flex-wrap gap-2">
@@ -199,7 +303,7 @@ export default function Inventory() {
                         </button>
                       </th>
                     ))}
-                    {["Region", "Status", ""].map((h) => (
+                    {["Status", "Actions"].map((h) => (
                       <th key={h} className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                         {h}
                       </th>
@@ -211,8 +315,8 @@ export default function Inventory() {
                     <tr key={`${r.store_id}-${r.product_id}`} className="transition-colors hover:bg-brand-50/50">
                       <td className="whitespace-nowrap px-4 py-2 font-medium text-gray-900">{r.product_id}</td>
                       <td className="whitespace-nowrap px-4 py-2 text-gray-600">{r.category}</td>
-                      <td className="whitespace-nowrap px-4 py-2 text-gray-600">{r.store_id}</td>
                       <td className="whitespace-nowrap px-4 py-2 text-gray-600">{r.region}</td>
+                      <td className="whitespace-nowrap px-4 py-2 text-gray-600">{r.store_id}</td>
                       <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-900">{r.inventory_level}</td>
                       <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-600">{r.units_ordered}</td>
                       <td className="whitespace-nowrap px-4 py-2">
@@ -227,6 +331,7 @@ export default function Inventory() {
                         )}
                       </td>
                       <td className="whitespace-nowrap px-4 py-2 text-right">
+                        <button type="button" onClick={() => beginEdit(r)} className="mr-2 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">Edit stock</button>
                         <PinButton productId={r.product_id} />
                       </td>
                     </tr>

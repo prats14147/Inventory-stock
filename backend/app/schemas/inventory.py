@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CurrentInventoryRow(BaseModel):
@@ -13,6 +13,26 @@ class CurrentInventoryRow(BaseModel):
     units_ordered: int
     category: str
     region: str
+
+
+class InventoryUpsertRequest(BaseModel):
+    """Create a product/store stock record or update its current quantity."""
+
+    product_id: str = Field(min_length=1, max_length=20)
+    store_id: str = Field(min_length=1, max_length=20)
+    inventory_level: int = Field(ge=0)
+    units_ordered: int = Field(default=0, ge=0)
+    category: str | None = Field(default=None, min_length=1, max_length=50)
+    region: str | None = Field(default=None, min_length=1, max_length=50)
+
+
+class InventoryUpsertResponse(BaseModel):
+    date: date
+    product_id: str
+    store_id: str
+    inventory_level: int
+    units_ordered: int
+    created: bool
 
 
 class StoreInventory(BaseModel):

@@ -195,6 +195,11 @@ def build_live_feature_row(df: pd.DataFrame, horizon: int) -> pd.DataFrame:
         rows.append(row)
 
     result = pd.DataFrame(rows)
+    if result.empty:
+        # New products can have stock records before they have enough sales
+        # history for a forecast. Let the caller report that cleanly instead
+        # of indexing a missing target_date column here.
+        return result
     time_feats = _add_time_features(result["target_date"], prefix="target")
     result = pd.concat([result, time_feats], axis=1)
 

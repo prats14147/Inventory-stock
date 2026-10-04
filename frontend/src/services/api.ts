@@ -21,7 +21,7 @@ import type { LiveSalesEvent, LiveSummary, SimulatorStatus, StockoutAlert } from
 import type { AlertDigest, WatchlistEntry, WatchlistListResponse } from "../types/watchlist";
 import type { DashboardSummary } from "../types/dashboard";
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 export class ApiError extends Error {
   status: number;
@@ -33,7 +33,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -63,6 +63,17 @@ export const getProduct = (productId: string) => request<ProductDetailResponse>(
 // --- Inventory ---
 export const getCurrentInventory = (params: { category?: string; region?: string } = {}) =>
   request<CurrentInventoryRow[]>(`/api/inventory${qs(params)}`);
+export const saveInventory = (payload: {
+  product_id: string;
+  store_id: string;
+  inventory_level: number;
+  units_ordered: number;
+  category?: string;
+  region?: string;
+}) => request<{ date: string; product_id: string; store_id: string; inventory_level: number; units_ordered: number; created: boolean }>(
+  "/api/inventory",
+  { method: "POST", body: JSON.stringify(payload) }
+);
 export const getProductInventory = (productId: string) =>
   request<ProductInventoryResponse>(`/api/inventory/${productId}`);
 export const getLowStock = (threshold?: number) =>
@@ -79,6 +90,22 @@ export const getSales = (
     limit?: number;
   } = {}
 ) => request<DailySaleRow[]>(`/api/sales${qs(params)}`);
+
+export const recordSale = (payload: {
+  product_id: string;
+  store_id: string;
+  units_sold: number;
+  price: number;
+  category: string;
+  region: string;
+}) => request<{
+  date: string;
+  product_id: string;
+  store_id: string;
+  units_sold: number;
+  daily_units_sold: number;
+  remaining_inventory: number;
+}>("/api/sales/record", { method: "POST", body: JSON.stringify(payload) });
 
 export const getTopProducts = (limit = 10, start_date?: string, end_date?: string) =>
   request<TopProductsResponse>(`/api/sales/top-products${qs({ limit, start_date, end_date })}`);
@@ -190,8 +217,8 @@ export const unpinProduct = (productId: string) =>
  * points VITE_API_BASE_URL at a real host still gets websockets from it
  * (http->ws, https->wss).
  */
-export const liveStreamUrl = () => `${BASE_URL.replace(/^http/, "ws")}/api/live/ws`;
+export const liveStreamUrl = () => `${API_BASE_URL.replace(/^http/, "ws")}/api/live/ws`;
 export const chatStreamUrl = (sessionId?: string | null) => {
-  const base = `${BASE_URL.replace(/^http/, "ws")}/api/chat/ws`;
+  const base = `${API_BASE_URL.replace(/^http/, "ws")}/api/chat/ws`;
   return sessionId ? `${base}?session_id=${encodeURIComponent(sessionId)}` : base;
 };

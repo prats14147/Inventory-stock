@@ -7,6 +7,7 @@ from app.database import get_db
 from app.repositories import product_repository
 from app.schemas.reorder import ReorderResponse
 from app.services import reorder_service
+from app.services.errors import NotFoundError
 
 router = APIRouter(prefix="/api/reorder", tags=["reorder"])
 
@@ -17,10 +18,14 @@ def list_reorder(
     only_needed: bool = Query(False, description="If true, only return products with a nonzero reorder quantity"),
     db: Session = Depends(get_db),
 ):
-    results = [
-        reorder_service.calculate_reorder(db, pid, lead_time_days=lead_time_days)
-        for pid in product_repository.list_product_ids(db)
-    ]
+    results = []
+    for pid in product_repository.list_product_ids(db):
+        try:
+            results.append(reorder_service.calculate_reorder(db, pid, lead_time_days=lead_time_days))
+        except NotFoundError:
+            # A reorder quantity needs a forecast; skip products without
+            # enough sales history until they have usable history.
+            continue
     if only_needed:
         results = [r for r in results if r.recommended_reorder_quantity > 0]
     return results

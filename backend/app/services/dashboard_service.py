@@ -27,6 +27,7 @@ from app.schemas.dashboard import (
     RiskCounts,
 )
 from app.services import inventory_service, reorder_service, sales_service, stockout_service
+from app.services.errors import NotFoundError
 
 # How many at-risk products the "needs attention" block lists. The full set is
 # always available on the Stockout page -- this is a "what do I do first" list,
@@ -46,11 +47,15 @@ def get_dashboard_summary(db: Session) -> DashboardSummaryResponse:
 
     # Asked BEFORE the loop: after it, every product is cached by definition,
     # so checking afterwards would always report True.
-    served_from_cache = (
-        all(stockout_service.was_cached(pid) for pid in product_ids) if product_ids else True
-    )
-
-    risks = [stockout_service.calculate_stockout_risk(db, pid) for pid in product_ids]
+    cached_before_compute = {pid: stockout_service.was_cached(pid) for pid in product_ids}
+    risks = []
+    for pid in product_ids:
+        try:
+            risks.append(stockout_service.calculate_stockout_risk(db, pid))
+        except NotFoundError:
+            # New products have inventory but no sales history to forecast yet.
+            continue
+    served_from_cache = all(cached_before_compute[r.product_id] for r in risks)
 
     high = [r for r in risks if r.risk.value == "HIGH"]
     medium = [r for r in risks if r.risk.value == "MEDIUM"]

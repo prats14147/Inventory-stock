@@ -58,10 +58,10 @@ def get_all_current_inventory(
             DailyInventory.product_id,
             DailyInventory.inventory_level,
             DailyInventory.units_ordered,
-            DailySales.category,
-            DailySales.region,
+            func.coalesce(DailyInventory.category, DailySales.category, "Uncategorized").label("category"),
+            func.coalesce(DailyInventory.region, DailySales.region, "Unassigned").label("region"),
         )
-        .join(
+        .outerjoin(
             DailySales,
             (DailySales.date == DailyInventory.date)
             & (DailySales.store_id == DailyInventory.store_id)
@@ -70,9 +70,9 @@ def get_all_current_inventory(
         .where(DailyInventory.date == ref_date)
     )
     if category:
-        stmt = stmt.where(DailySales.category == category)
+        stmt = stmt.where(func.coalesce(DailyInventory.category, DailySales.category) == category)
     if region:
-        stmt = stmt.where(DailySales.region == region)
+        stmt = stmt.where(func.coalesce(DailyInventory.region, DailySales.region) == region)
     if below_threshold is not None:
         stmt = stmt.where(DailyInventory.inventory_level < below_threshold)
 

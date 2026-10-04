@@ -21,6 +21,8 @@ class DailyInventory(Base):
 
     inventory_level: Mapped[int] = mapped_column(Integer, nullable=False)
     units_ordered: Mapped[int] = mapped_column(Integer, nullable=False)
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    region: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     store = relationship("Store", back_populates="inventory_records")
     product = relationship("Product", back_populates="inventory_records")

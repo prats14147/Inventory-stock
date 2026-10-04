@@ -1,7 +1,7 @@
 // frontend/src/hooks/useApi.ts
 
 import { useEffect, useState } from "react";
-import { ApiError } from "../services/api";
+import { API_BASE_URL, ApiError } from "../services/api";
 
 interface UseApiState<T> {
   data: T | null;
@@ -25,7 +25,11 @@ export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[] = []): UseA
       })
       .catch((err) => {
         if (!cancelled) {
-          const message = err instanceof ApiError ? err.message : "Something went wrong. Please try again.";
+          const message = err instanceof ApiError
+            ? err.message
+            : err instanceof TypeError
+              ? `Cannot reach the InventoryAI API at ${API_BASE_URL}. Start the backend and PostgreSQL, then reload this page.`
+              : "Something went wrong. Please try again.";
           setState({ data: null, loading: false, error: message });
         }
       });
