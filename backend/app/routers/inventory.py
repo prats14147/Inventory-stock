@@ -166,6 +166,20 @@ def adjust_inventory(
             detail="Stock cannot become negative",
         )
 
+    # A delivery is stock that has arrived from a previously placed order.
+    # Therefore it increases stock on hand and reduces outstanding units ordered.
+    if payload.movement_type == DELIVERY:
+        if payload.quantity_delta > row.units_ordered:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Cannot deliver {payload.quantity_delta} units. "
+                    f"Only {row.units_ordered} units are currently ordered."
+                ),
+            )
+
+        row.units_ordered -= payload.quantity_delta
+
     row.inventory_level = quantity_after
 
     movement = StockMovement(
