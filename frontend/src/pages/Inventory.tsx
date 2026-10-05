@@ -1,15 +1,17 @@
-// frontend/src/pages/Inventory.tsx
-
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+
 import { useApi } from "../hooks/useApi";
+
 import {
   ApiError,
   adjustInventory,
   getCurrentInventory,
+  getProducts,
   getStockMovements,
   saveInventory,
 } from "../services/api";
+
 import { LoadingState, ErrorState } from "../components/LoadingError";
 import PageHeader from "../components/PageHeader";
 import Card from "../components/Card";
@@ -25,6 +27,7 @@ const CATEGORIES = [
 ];
 
 const REGIONS = ["North", "South", "East", "West"];
+
 const PAGE_SIZE = 20;
 
 type SortKey =
@@ -66,8 +69,8 @@ export default function Inventory() {
   const [storeFilter, setStoreFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "low">("all");
   const [movementTypeFilter, setMovementTypeFilter] = useState("");
-
   const [refreshKey, setRefreshKey] = useState(0);
+
   const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
@@ -85,12 +88,9 @@ export default function Inventory() {
     store_id: "",
     inventory_level: "",
     units_ordered: "0",
-    category: "",
     region: "",
   });
 
-  // Deep link (?product=P0001) wins on arrival and whenever the URL changes.
-  // This is how chat answer cards and the watchlist hand off to this page.
   useEffect(() => {
     setProductFilter(urlProduct);
   }, [urlProduct]);
@@ -121,6 +121,46 @@ export default function Inventory() {
     () => getCurrentInventory({ category: category || undefined }),
     [category, refreshKey]
   );
+
+  // -------------------------------------------------------------------------
+  // Product catalog
+  // -------------------------------------------------------------------------
+
+  const {
+    data: productsData,
+    loading: productsLoading,
+    error: productsError,
+  } = useApi(() => getProducts(), []);
+
+  const productMap = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        product_id: string;
+        name: string;
+        sku: string;
+        category: string;
+      }
+    >();
+
+    for (const product of productsData?.products ?? []) {
+      map.set(product.product_id, product);
+    }
+
+    return map;
+  }, [productsData]);
+
+  function getProductName(productId: string) {
+    return productMap.get(productId)?.name ?? "Unknown product";
+  }
+
+  function getProductSku(productId: string) {
+    return productMap.get(productId)?.sku ?? "—";
+  }
+
+  function getProductCategory(productId: string, fallback: string) {
+    return productMap.get(productId)?.category ?? fallback;
+  }
 
   // -------------------------------------------------------------------------
   // Stock movement history
@@ -156,7 +196,6 @@ export default function Inventory() {
       store_id: "",
       inventory_level: "",
       units_ordered: "0",
-      category: "",
       region: "",
     });
 
@@ -166,13 +205,14 @@ export default function Inventory() {
     setFormOpen(true);
   }
 
-  function beginEdit(row: NonNullable<typeof data>[number]) {
+  function beginEdit(
+    row: NonNullable<typeof data>[number]
+  ) {
     setForm({
       product_id: row.product_id,
       store_id: row.store_id,
       inventory_level: String(row.inventory_level),
       units_ordered: String(row.units_ordered),
-      category: CATEGORIES.includes(row.category) ? row.category : "",
       region: REGIONS.includes(row.region) ? row.region : "",
     });
 
@@ -182,7 +222,10 @@ export default function Inventory() {
     setFormOpen(true);
   }
 
-  // Check whether the product/store entered in the form already exists.
+  // -------------------------------------------------------------------------
+  // Check whether the product/store already exists
+  // -------------------------------------------------------------------------
+
   const existingFormRow = useMemo(() => {
     const productId = form.product_id.trim();
     const storeId = form.store_id.trim();
@@ -198,7 +241,13 @@ export default function Inventory() {
     );
   }, [data, form.product_id, form.store_id]);
 
-  async function submitInventory(event: FormEvent<HTMLFormElement>) {
+  // -------------------------------------------------------------------------
+  // Submit inventory form
+  // -------------------------------------------------------------------------
+
+  async function submitInventory(
+    event: FormEvent<HTMLFormElement>
+  ) {
     event.preventDefault();
 
     setSaving(true);
@@ -210,7 +259,9 @@ export default function Inventory() {
       const storeId = form.store_id.trim();
 
       if (!productId || !storeId) {
-        throw new Error("Product ID and Store ID are required.");
+        throw new Error(
+          "Please select a product and enter a Store ID."
+        );
       }
 
       // ---------------------------------------------------------------
@@ -227,7 +278,8 @@ export default function Inventory() {
         }
 
         if (
-          (movementType === "DELIVERY" || movementType === "RETURN") &&
+          (movementType === "DELIVERY" ||
+            movementType === "RETURN") &&
           delta <= 0
         ) {
           throw new Error(
@@ -255,38 +307,62 @@ export default function Inventory() {
             " "
           )} recorded for ${result.product_id} at ${
             result.store_id
-          }: ${result.quantity_before} → ${result.quantity_after}.`
+          }: ${result.quantity_before} → ${
+            result.quantity_after
+          }.`
         );
       } else {
         // -------------------------------------------------------------
-        // New product/store = create the starting inventory record
+        // New product/store = create starting inventory record
         // -------------------------------------------------------------
+
+        if (!productMap.has(productId)) {
+          throw new Error(
+            "Please select a valid product from the product catalog."
+          );
+        }
 
         if (!form.inventory_level.trim()) {
           throw new Error("Please enter the starting stock.");
-        }
-
-        if (!form.category) {
-          throw new Error("Please select a category.");
         }
 
         if (!form.region) {
           throw new Error("Please select a region.");
         }
 
+        const startingStock = Number(form.inventory_level);
+        const unitsOrdered = Number(form.units_ordered);
+
+        if (
+          !Number.isInteger(startingStock) ||
+          startingStock < 0
+        ) {
+          throw new Error(
+            "Starting stock must be a whole number of 0 or more."
+          );
+        }
+
+        if (
+          !Number.isInteger(unitsOrdered) ||
+          unitsOrdered < 0
+        ) {
+          throw new Error(
+            "Units ordered must be a whole number of 0 or more."
+          );
+        }
+
         const result = await saveInventory({
           product_id: productId,
           store_id: storeId,
-          inventory_level: Number(form.inventory_level),
-          units_ordered: Number(form.units_ordered),
-          category: form.category,
+          inventory_level: startingStock,
+          units_ordered: unitsOrdered,
           region: form.region,
         });
 
         setSuccessMessage(
-          `${result.created ? "Stock record added" : "Stock updated"} for ${
-            result.product_id
-          } at ${result.store_id}.`
+          `${
+            result.created ? "Stock record added" : "Stock updated"
+          } for ${result.product_id} at ${result.store_id}.`
         );
       }
 
@@ -313,19 +389,19 @@ export default function Inventory() {
 
     if (productFilter) {
       filtered = filtered.filter(
-        (r) => r.product_id === productFilter
+        (row) => row.product_id === productFilter
       );
     }
 
     if (storeFilter) {
       filtered = filtered.filter(
-        (r) => r.store_id === storeFilter
+        (row) => row.store_id === storeFilter
       );
     }
 
     if (statusFilter === "low") {
       filtered = filtered.filter(
-        (r) => r.inventory_level < 50
+        (row) => row.inventory_level < 50
       );
     }
 
@@ -345,8 +421,8 @@ export default function Inventory() {
 
   function toggleSort(key: SortKey) {
     if (key === sortKey) {
-      setSortDir((d) =>
-        d === "asc" ? "desc" : "asc"
+      setSortDir((direction) =>
+        direction === "asc" ? "desc" : "asc"
       );
     } else {
       setSortKey(key);
@@ -357,24 +433,42 @@ export default function Inventory() {
   }
 
   const sorted = useMemo(() => {
-    const filtered = rows.filter((r) => {
-      if (!search) return true;
+    const filtered = rows.filter((row) => {
+      if (!search) {
+        return true;
+      }
 
       const q = search.toLowerCase();
 
+      const product = productMap.get(row.product_id);
+
       return (
-        r.product_id.toLowerCase().includes(q) ||
-        r.category.toLowerCase().includes(q) ||
-        r.store_id.toLowerCase().includes(q) ||
-        r.region.toLowerCase().includes(q)
+        row.product_id.toLowerCase().includes(q) ||
+        row.category.toLowerCase().includes(q) ||
+        row.store_id.toLowerCase().includes(q) ||
+        row.region.toLowerCase().includes(q) ||
+        product?.name.toLowerCase().includes(q) ||
+        product?.sku.toLowerCase().includes(q) ||
+        product?.category.toLowerCase().includes(q)
       );
     });
 
     const dir = sortDir === "asc" ? 1 : -1;
 
     return [...filtered].sort((a, b) => {
-      const av = a[sortKey];
-      const bv = b[sortKey];
+      let av: string | number;
+      let bv: string | number;
+
+      if (sortKey === "product_id") {
+        av = productMap.get(a.product_id)?.name ?? a.product_id;
+        bv = productMap.get(b.product_id)?.name ?? b.product_id;
+      } else if (sortKey === "category") {
+        av = getProductCategory(a.product_id, a.category);
+        bv = getProductCategory(b.product_id, b.category);
+      } else {
+        av = a[sortKey];
+        bv = b[sortKey];
+      }
 
       if (
         typeof av === "number" &&
@@ -383,18 +477,15 @@ export default function Inventory() {
         return (av - bv) * dir;
       }
 
-      return (
-        String(av).localeCompare(String(bv)) * dir
-      );
+      return String(av).localeCompare(String(bv)) * dir;
     });
-  }, [rows, search, sortKey, sortDir]);
+  }, [rows, search, sortKey, sortDir, productMap]);
 
   const pageCount = Math.max(
     1,
     Math.ceil(sorted.length / PAGE_SIZE)
   );
 
-  // A filter change can leave us past the last page; clamp rather than blank.
   const currentPage = Math.min(page, pageCount);
 
   const paged = sorted.slice(
@@ -402,21 +493,12 @@ export default function Inventory() {
     currentPage * PAGE_SIZE
   );
 
-  const productIds = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          (data ?? []).map((r) => r.product_id)
-        )
-      ).sort(),
-    [data]
-  );
 
   const storeIds = useMemo(
     () =>
       Array.from(
         new Set(
-          (data ?? []).map((r) => r.store_id)
+          (data ?? []).map((row) => row.store_id)
         )
       ).sort(),
     [data]
@@ -455,16 +537,12 @@ export default function Inventory() {
     switch (type) {
       case "SALE":
         return "bg-red-100 text-red-800 ring-red-600/20";
-
       case "DELIVERY":
         return "bg-blue-100 text-blue-800 ring-blue-600/20";
-
       case "RETURN":
         return "bg-green-100 text-green-800 ring-green-600/20";
-
       case "MANUAL_CORRECTION":
         return "bg-amber-100 text-amber-800 ring-amber-600/20";
-
       default:
         return "bg-gray-100 text-gray-800 ring-gray-600/20";
     }
@@ -480,7 +558,7 @@ export default function Inventory() {
         title="Inventory"
         subtitle={
           search
-            ? `${sorted.length} of ${rows.length} rows match “${search}”. Low means under 50 units.`
+            ? `${sorted.length} of ${sorted.length} rows match “${search}”. Low means under 50 units.`
             : `${sorted.length} of ${
                 (data ?? []).length
               } store-product combinations shown. Low means under 50 units.`
@@ -489,9 +567,9 @@ export default function Inventory() {
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-100 bg-brand-50 px-4 py-3">
         <p className="text-sm text-gray-700">
-          Add a new product with starting stock, or record a
-          delivery, return, or manual correction for an existing
-          product.
+          Add stock for a catalog product, or record a
+          delivery, return, or manual correction for an
+          existing product.
         </p>
 
         <button
@@ -532,28 +610,60 @@ export default function Inventory() {
               <p className="mt-1 text-sm text-gray-500">
                 {existingFormRow
                   ? "This product already exists. Choose the type of stock movement, enter the quantity change, and explain why the stock changed."
-                  : "Enter the product and store information together with its starting stock."}
+                  : "Select a product from the catalog and enter its starting stock and store information."}
               </p>
             </div>
 
             {/* Product and store */}
+
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="space-y-1 text-sm font-medium text-gray-700">
-                Product ID
+                Product
 
-                <input
+                <select
                   required
-                  maxLength={20}
                   value={form.product_id}
-                  onChange={(e) =>
+                  disabled={productsLoading}
+                  onChange={(event) =>
                     setForm({
                       ...form,
-                      product_id: e.target.value,
+                      product_id: event.target.value,
                     })
                   }
-                  placeholder="e.g. P0021"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                />
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal disabled:bg-gray-100"
+                >
+                  <option value="" disabled>
+                    {productsLoading
+                      ? "Loading products..."
+                      : "Select a product"}
+                  </option>
+
+                  {(productsData?.products ?? []).map(
+                    (product) => (
+                      <option
+                        key={product.product_id}
+                        value={product.product_id}
+                      >
+                        {product.product_id} — {product.name} (
+                        {product.sku})
+                      </option>
+                    )
+                  )}
+                </select>
+
+                {form.product_id &&
+                  productMap.has(form.product_id) && (
+                    <span className="block text-xs font-normal text-gray-500">
+                      Category:{" "}
+                      {productMap.get(form.product_id)?.category}
+                    </span>
+                  )}
+
+                {productsError && (
+                  <span className="block text-xs font-normal text-red-600">
+                    Could not load the product catalog.
+                  </span>
+                )}
               </label>
 
               <label className="space-y-1 text-sm font-medium text-gray-700">
@@ -563,10 +673,11 @@ export default function Inventory() {
                   required
                   maxLength={20}
                   value={form.store_id}
-                  onChange={(e) =>
+                  onChange={(event) =>
                     setForm({
                       ...form,
-                      store_id: e.target.value                    })
+                      store_id: event.target.value,
+                    })
                   }
                   placeholder="e.g. S0001"
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
@@ -580,7 +691,7 @@ export default function Inventory() {
 
             {!existingFormRow && (
               <>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <label className="space-y-1 text-sm font-medium text-gray-700">
                     Starting Stock
 
@@ -590,11 +701,11 @@ export default function Inventory() {
                       min="0"
                       step="1"
                       value={form.inventory_level}
-                      onChange={(e) =>
+                      onChange={(event) =>
                         setForm({
                           ...form,
                           inventory_level:
-                            e.target.value,
+                            event.target.value,
                         })
                       }
                       placeholder="e.g. 100"
@@ -611,44 +722,15 @@ export default function Inventory() {
                       min="0"
                       step="1"
                       value={form.units_ordered}
-                      onChange={(e) =>
+                      onChange={(event) =>
                         setForm({
                           ...form,
                           units_ordered:
-                            e.target.value,
+                            event.target.value,
                         })
                       }
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
                     />
-                  </label>
-
-                  <label className="space-y-1 text-sm font-medium text-gray-700">
-                    Category
-
-                    <select
-                      required
-                      value={form.category}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          category: e.target.value,
-                        })
-                      }
-                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal"
-                    >
-                      <option value="" disabled>
-                        Select a category
-                      </option>
-
-                      {CATEGORIES.map((item) => (
-                        <option
-                          key={item}
-                          value={item}
-                        >
-                          {item}
-                        </option>
-                      ))}
-                    </select>
                   </label>
 
                   <label className="space-y-1 text-sm font-medium text-gray-700">
@@ -657,10 +739,10 @@ export default function Inventory() {
                     <select
                       required
                       value={form.region}
-                      onChange={(e) =>
+                      onChange={(event) =>
                         setForm({
                           ...form,
-                          region: e.target.value,
+                          region: event.target.value,
                         })
                       }
                       className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal"
@@ -681,10 +763,28 @@ export default function Inventory() {
                   </label>
                 </div>
 
+                {form.product_id &&
+                  productMap.has(form.product_id) && (
+                    <div className="rounded-lg border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-gray-700">
+                      <strong>Product:</strong>{" "}
+                      {form.product_id} —{" "}
+                      {getProductName(form.product_id)}{" "}
+                      ({getProductSku(form.product_id)})
+                      <br />
+                      <strong>Standard category:</strong>{" "}
+                      {getProductCategory(
+                        form.product_id,
+                        "—"
+                      )}
+                    </div>
+                  )}
+
                 <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-600">
-                  <strong>New product:</strong> Starting
-                  stock is the initial quantity currently
-                  available. It will not create a movement
+                  <strong>New product stock:</strong>{" "}
+                  Starting stock is the initial quantity
+                  currently available. The product category
+                  comes automatically from the product catalog.
+                  This starting stock does not create a movement
                   history entry.
                 </div>
               </>
@@ -697,6 +797,19 @@ export default function Inventory() {
             {existingFormRow && (
               <>
                 <div className="rounded-lg border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-gray-700">
+                  <strong>Product:</strong>{" "}
+                  {existingFormRow.product_id} —{" "}
+                  {getProductName(
+                    existingFormRow.product_id
+                  )}{" "}
+                  ({getProductSku(existingFormRow.product_id)})
+                  <br />
+                  <strong>Category:</strong>{" "}
+                  {getProductCategory(
+                    existingFormRow.product_id,
+                    existingFormRow.category
+                  )}
+                  <br />
                   <strong>Current stock:</strong>{" "}
                   {existingFormRow.inventory_level} units
                 </div>
@@ -708,9 +821,9 @@ export default function Inventory() {
                     <select
                       required
                       value={movementType}
-                      onChange={(e) =>
+                      onChange={(event) =>
                         setMovementType(
-                          e.target.value as
+                          event.target.value as
                             | "DELIVERY"
                             | "RETURN"
                             | "MANUAL_CORRECTION"
@@ -740,9 +853,9 @@ export default function Inventory() {
                       type="number"
                       step="1"
                       value={quantityDelta}
-                      onChange={(e) =>
+                      onChange={(event) =>
                         setQuantityDelta(
-                          e.target.value
+                          event.target.value
                         )
                       }
                       placeholder={
@@ -770,9 +883,9 @@ export default function Inventory() {
                       type="text"
                       maxLength={500}
                       value={movementReason}
-                      onChange={(e) =>
+                      onChange={(event) =>
                         setMovementReason(
-                          e.target.value
+                          event.target.value
                         )
                       }
                       placeholder={
@@ -843,28 +956,31 @@ export default function Inventory() {
           <input
             type="search"
             value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
+            onChange={(event) => {
+              setSearch(event.target.value);
               setPage(1);
             }}
-            placeholder="Search product, category, store, region..."
-            className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none sm:w-64"
+            placeholder="Search product, SKU, category, store, region..."
+            className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none sm:w-72"
             aria-label="Search inventory rows"
           />
 
           <select
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
             value={category}
-            onChange={(e) =>
-              setCategory(e.target.value)
-            }
+            onChange={(event) => {
+              setCategory(event.target.value);
+              setPage(1);
+            }}
             aria-label="Filter by category"
           >
-            <option value="">All categories</option>
+            <option value="">
+              All categories
+            </option>
 
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c}
+            {CATEGORIES.map((item) => (
+              <option key={item} value={item}>
+                {item}
               </option>
             ))}
           </select>
@@ -872,33 +988,41 @@ export default function Inventory() {
           <select
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
             value={productFilter}
-            onChange={(e) =>
-              changeProduct(e.target.value)
+            onChange={(event) =>
+              changeProduct(event.target.value)
             }
             aria-label="Filter by product"
           >
-            <option value="">All products</option>
+            <option value="">
+              All products
+            </option>
 
-            {productIds.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
+            {(productsData?.products ?? []).map(
+              (product) => (
+                <option
+                  key={product.product_id}
+                  value={product.product_id}
+                >
+                  {product.product_id} — {product.name}
+                </option>
+              )
+            )}
           </select>
 
           <select
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
             value={storeFilter}
-            onChange={(e) =>
-              setStoreFilter(e.target.value)
-            }
+            onChange={(event) => {
+              setStoreFilter(event.target.value);
+              setPage(1);
+            }}
             aria-label="Filter by store"
           >
             <option value="">All stores</option>
 
-            {storeIds.map((s) => (
-              <option key={s} value={s}>
-                {s}
+            {storeIds.map((storeId) => (
+              <option key={storeId} value={storeId}>
+                {storeId}
               </option>
             ))}
           </select>
@@ -906,13 +1030,14 @@ export default function Inventory() {
           <select
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
             value={statusFilter}
-            onChange={(e) =>
+            onChange={(event) => {
               setStatusFilter(
-                e.target.value as "all" | "low"
-              )
-            }
+                event.target.value as "all" | "low"
+              );
+              setPage(1);
+            }}
             aria-label="Filter by stock status"
-            >  
+          >
             <option value="all">
               All stock levels
             </option>
@@ -935,30 +1060,30 @@ export default function Inventory() {
               <table className="min-w-full divide-y divide-gray-200 text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    {COLUMNS.map((col) => (
+                    {COLUMNS.map((column) => (
                       <th
-                        key={col.key}
+                        key={column.key}
                         className="whitespace-nowrap px-4 py-2.5 text-left"
                       >
                         <button
                           type="button"
                           onClick={() =>
-                            toggleSort(col.key)
+                            toggleSort(column.key)
                           }
                           className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-800"
-                          aria-label={`Sort by ${col.label}`}
+                          aria-label={`Sort by ${column.label}`}
                         >
-                          {col.label}
+                          {column.label}
 
                           <span
                             aria-hidden="true"
                             className={
-                              sortKey === col.key
+                              sortKey === column.key
                                 ? "text-brand-600"
                                 : "text-gray-300"
                             }
                           >
-                            {sortKey === col.key
+                            {sortKey === column.key
                               ? sortDir === "asc"
                                 ? "▲"
                                 : "▼"
@@ -969,12 +1094,12 @@ export default function Inventory() {
                     ))}
 
                     {["Status", "Actions"].map(
-                      (h) => (
+                      (heading) => (
                         <th
-                          key={h}
+                          key={heading}
                           className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500"
                         >
-                          {h}
+                          {heading}
                         </th>
                       )
                     )}
@@ -982,66 +1107,84 @@ export default function Inventory() {
                 </thead>
 
                 <tbody className="divide-y divide-gray-100">
-                  {paged.map((r) => (
-                    <tr
-                      key={`${r.store_id}-${r.product_id}`}
-                      className="transition-colors hover:bg-brand-50/50"
-                    >
-                      <td className="whitespace-nowrap px-4 py-2 font-medium text-gray-900">
-                        {r.product_id}
-                      </td>
+                  {paged.map((row) => {
+                    const product =
+                      productMap.get(row.product_id);
 
-                      <td className="whitespace-nowrap px-4 py-2 text-gray-600">
-                        {r.category}
-                      </td>
+                    const displayCategory =
+                      product?.category ?? row.category;
 
-                      <td className="whitespace-nowrap px-4 py-2 text-gray-600">
-                        {r.region}
-                      </td>
+                    return (
+                      <tr
+                        key={`${row.store_id}-${row.product_id}`}
+                        className="transition-colors hover:bg-brand-50/50"
+                      >
+                        <td className="px-4 py-2 font-medium text-gray-900">
+                          <div>
+                            {product?.name ??
+                              row.product_id}
+                          </div>
 
-                      <td className="whitespace-nowrap px-4 py-2 text-gray-600">
-                        {r.store_id}
-                      </td>
+                          <div className="text-xs font-normal text-gray-500">
+                            {row.product_id}
+                            {product?.sku
+                              ? ` · ${product.sku}`
+                              : ""}
+                          </div>
+                        </td>
 
-                      <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-900">
-                        {r.inventory_level}
-                      </td>
+                        <td className="whitespace-nowrap px-4 py-2 text-gray-600">
+                          {displayCategory}
+                        </td>
 
-                      <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-600">
-                        {r.units_ordered}
-                      </td>
+                        <td className="whitespace-nowrap px-4 py-2 text-gray-600">
+                          {row.region}
+                        </td>
 
-                      <td className="whitespace-nowrap px-4 py-2">
-                        {r.inventory_level < 50 ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-inset ring-amber-600/20">
-                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                            Low
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800 ring-1 ring-inset ring-green-600/20">
-                            <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                            OK
-                          </span>
-                        )}
-                </td>
+                        <td className="whitespace-nowrap px-4 py-2 text-gray-600">
+                          {row.store_id}
+                        </td>
 
-                      <td className="whitespace-nowrap px-4 py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            beginEdit(r)
-                          }
-                          className="mr-2 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                        >
-                          Edit stock
-                        </button>
+                        <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-900">
+                          {row.inventory_level}
+                        </td>
 
-                        <PinButton
-                          productId={r.product_id}
-                        />
-                      </td>
-                    </tr>
-                  ))}
+                        <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-600">
+                          {row.units_ordered}
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-2">
+                          {row.inventory_level < 50 ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-inset ring-amber-600/20">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                              Low
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800 ring-1 ring-inset ring-green-600/20">
+                              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                              OK
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              beginEdit(row)
+                            }
+                            className="mr-2 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                          >
+                            Edit stock
+                          </button>
+
+                          <PinButton
+                            productId={row.product_id}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1050,7 +1193,7 @@ export default function Inventory() {
               <div className="mt-3">
                 <EmptyState
                   title="No matching rows."
-                  hint="Try widening the filters — e.g. clear the search box, the product filter, or the low-stock-onlyilter."
+                  hint="Try widening the filters — e.g. clear the search box, the product filter, or the low-stock-only filter."
                 />
               </div>
             )}
@@ -1062,10 +1205,7 @@ export default function Inventory() {
               >
                 <span className="text-gray-500">
                   Showing{" "}
-                  {(currentPage - 1) *
-                    PAGE_SIZE +
-                    1}
-                  –
+                  {(currentPage - 1) * PAGE_SIZE + 1}–
                   {Math.min(
                     currentPage * PAGE_SIZE,
                     sorted.length
@@ -1077,8 +1217,8 @@ export default function Inventory() {
                   <button
                     type="button"
                     onClick={() =>
-                      setPage((p) =>
-                        Math.max(1, p - 1)
+                      setPage((current) =>
+                        Math.max(1, current - 1)
                       )
                     }
                     disabled={currentPage === 1}
@@ -1088,23 +1228,20 @@ export default function Inventory() {
                   </button>
 
                   <span className="tabular-nums text-gray-600">
-                    Page {currentPage} of{" "}
-                    {pageCount}
+                    Page {currentPage} of {pageCount}
                   </span>
 
                   <button
                     type="button"
                     onClick={() =>
-                      setPage((p) =>
+                      setPage((current) =>
                         Math.min(
                           pageCount,
-                          p + 1
+                          current + 1
                         )
                       )
                     }
-                    disabled={
-                      currentPage === pageCount
-                    }
+                    disabled={currentPage === pageCount}
                     className="rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Next →
@@ -1146,10 +1283,8 @@ export default function Inventory() {
           <select
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
             value={movementTypeFilter}
-            onChange={(e) =>
-              setMovementTypeFilter(
-                e.target.value
-              )
+            onChange={(event) =>
+              setMovementTypeFilter(event.target.value)
             }
             aria-label="Filter by movement type"
           >
@@ -1165,7 +1300,12 @@ export default function Inventory() {
           </select>
 
           <span className="flex items-center rounded-lg bg-gray-50 px-3 py-1.5 text-xs text-gray-500">
-            Product: {productFilter || "All"}
+            Product:{" "}
+            {productFilter
+              ? `${productFilter} — ${getProductName(
+                  productFilter
+                )}`
+              : "All"}
           </span>
 
           <span className="flex items-center rounded-lg bg-gray-50 px-3 py-1.5 text-xs text-gray-500">
@@ -1225,8 +1365,13 @@ export default function Inventory() {
                   </thead>
 
                   <tbody className="divide-y divide-gray-100">
-                    {movements.map(
-                      (movement) => (
+                    {movements.map((movement) => {
+                      const product =
+                        productMap.get(
+                          movement.product_id
+                        );
+
+                      return (
                         <tr
                           key={movement.id}
                           className="transition-colors hover:bg-brand-50/50"
@@ -1249,8 +1394,19 @@ export default function Inventory() {
                             </span>
                           </td>
 
-                          <td className="whitespace-nowrap px-4 py-3 font-medium text-gray-900">
-                            {movement.product_id}
+                          <td className="px-4 py-3 font-medium text-gray-900">
+                            <div>
+                              {product?.name ??
+                                movement.product_id}
+                            </div>
+
+                            <div className="text-xs font-normal text-gray-500">
+                              {movement.product_id}
+
+                              {product?.sku
+                                ? ` · ${product.sku}`
+                                : ""}
+                            </div>
                           </td>
 
                           <td className="whitespace-nowrap px-4 py-3 text-gray-600">
@@ -1266,8 +1422,7 @@ export default function Inventory() {
                                   : "text-red-700"
                               }
                             >
-                              {movement.quantity_delta >
-                              0
+                              {movement.quantity_delta > 0
                                 ? "+"
                                 : ""}
                               {
@@ -1290,8 +1445,8 @@ export default function Inventory() {
                             {movement.reason}
                           </td>
                         </tr>
-                      )
-                    )}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
