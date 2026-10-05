@@ -12,6 +12,12 @@ Phases 4-7. Error handling (spec section 46):
 
 from __future__ import annotations
 
+import os
+
+# Prevent macOS OpenMP duplicate runtime conflicts and thread deadlocks between sklearn and xgboost
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager

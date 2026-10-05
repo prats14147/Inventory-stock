@@ -136,7 +136,12 @@ class RedisSessionStore(SessionStore):
     def _init_client(self) -> None:
         try:
             import redis
-            self._client = redis.from_url(self._url, decode_responses=True)
+            self._client = redis.from_url(
+                self._url,
+                decode_responses=True,
+                socket_timeout=1.0,
+                socket_connect_timeout=1.0,
+            )
             self._client.ping()
             self._available = True
             log.info("Redis session store connected: %s", self._url)
@@ -226,7 +231,13 @@ class PostgresSessionStore(SessionStore):
         self.database_url = database_url or os.getenv("DATABASE_URL")
         if not self.database_url:
             raise ValueError("DATABASE_URL required for PostgresSessionStore")
-        self.engine = create_engine(self.database_url)
+        self.engine = create_engine(
+            self.database_url,
+            pool_pre_ping=True,
+            pool_size=10,
+            max_overflow=15,
+            pool_recycle=300,
+        )
         self.SessionLocal = sessionmaker(bind=self.engine)
         # NOTE: no create_all() here. The conversation_* tables are owned by
         # Alembic (see d4e5f6a7b8c9_add_conversation_tables.py); creating them
