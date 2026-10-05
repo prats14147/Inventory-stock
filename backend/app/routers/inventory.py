@@ -34,10 +34,15 @@ def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_
     """Add a product/store stock row or update its quantity at the current data date."""
     as_of = inventory_repository.get_latest_date(db) or date.today()
 
+    # Products must already exist in the product catalog.
     product = db.get(Product, payload.product_id)
     if product is None:
-        db.add(Product(product_id=payload.product_id))
+        raise HTTPException(
+            status_code=404,
+            detail=f"Product {payload.product_id} not found in the product catalog.",
+        )
 
+    # Stores can still be created automatically.
     store = db.get(Store, payload.store_id)
     if store is None:
         db.add(Store(store_id=payload.store_id))
@@ -61,7 +66,7 @@ def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_
             store_id=payload.store_id,
             inventory_level=payload.inventory_level,
             units_ordered=payload.units_ordered,
-            category=payload.category,
+            category=product.category,
             region=payload.region,
         )
         db.add(row)
@@ -74,8 +79,8 @@ def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_
         row.inventory_level = quantity_after
         row.units_ordered = payload.units_ordered
 
-        if payload.category is not None:
-            row.category = payload.category
+        # Category now comes from the product catalog.
+        row.category = product.category
 
         if payload.region is not None:
             row.region = payload.region
