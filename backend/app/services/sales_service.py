@@ -31,10 +31,12 @@ def get_top_products(
     limit: int = 10,
     start_date: date | None = None,
     end_date: date | None = None,
+    source: str | None = None,
+    genuine_only: bool = False,
 ) -> TopProductsResponse:
     _validate_date_range(start_date, end_date)
     rows = sales_repository.get_ranked_products_by_sales(
-        db, limit=limit, ascending=False, start_date=start_date, end_date=end_date
+        db, limit=limit, ascending=False, start_date=start_date, end_date=end_date, source=source, genuine_only=genuine_only
     )
     return TopProductsResponse(
         start_date=start_date,
@@ -49,10 +51,12 @@ def get_bottom_products(
     limit: int = 10,
     start_date: date | None = None,
     end_date: date | None = None,
+    source: str | None = None,
+    genuine_only: bool = False,
 ) -> TopProductsResponse:
     _validate_date_range(start_date, end_date)
     rows = sales_repository.get_ranked_products_by_sales(
-        db, limit=limit, ascending=True, start_date=start_date, end_date=end_date
+        db, limit=limit, ascending=True, start_date=start_date, end_date=end_date, source=source, genuine_only=genuine_only
     )
     return TopProductsResponse(
         start_date=start_date,
@@ -70,6 +74,8 @@ def get_sales_trend(
     category: str | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
+    source: str | None = None,
+    genuine_only: bool = False,
 ) -> SalesTrendResponse:
     if granularity not in VALID_GRANULARITIES:
         raise InvalidRequestError(f"granularity must be one of {VALID_GRANULARITIES}, got '{granularity}'.")
@@ -86,6 +92,8 @@ def get_sales_trend(
         category=category,
         start_date=start_date,
         end_date=end_date,
+        source=source,
+        genuine_only=genuine_only,
     )
 
     return SalesTrendResponse(
@@ -96,18 +104,20 @@ def get_sales_trend(
             "category": category,
             "start_date": start_date.isoformat() if start_date else None,
             "end_date": end_date.isoformat() if end_date else None,
+            "source": source,
+            "genuine_only": str(genuine_only) if genuine_only else None,
         },
         points=[SalesTrendPoint(period=row["period"], total_units_sold=row["total_units_sold"]) for row in rows],
     )
 
 
-def get_category_analysis(db: Session) -> list[CategorySalesSummary]:
-    rows = sales_repository.get_category_sales_summary(db)
+def get_category_analysis(db: Session, source: str | None = None, genuine_only: bool = False) -> list[CategorySalesSummary]:
+    rows = sales_repository.get_category_sales_summary(db, source=source, genuine_only=genuine_only)
     return [CategorySalesSummary(**row) for row in rows]
 
 
-def get_store_analysis(db: Session) -> list[StoreSalesSummary]:
-    rows = sales_repository.get_store_sales_summary(db)
+def get_store_analysis(db: Session, source: str | None = None, genuine_only: bool = False) -> list[StoreSalesSummary]:
+    rows = sales_repository.get_store_sales_summary(db, source=source, genuine_only=genuine_only)
     return [StoreSalesSummary(**row) for row in rows]
 
 
@@ -118,6 +128,8 @@ def get_sales_records(
     category: str | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
+    source: str | None = None,
+    genuine_only: bool = False,
     limit: int = 100,
     offset: int = 0,
 ) -> SalesListResponse:
@@ -128,7 +140,14 @@ def get_sales_records(
         raise NotFoundError(f"Product '{product_id}' was not found in the current inventory data.")
 
     rows = sales_repository.get_sales_rows(
-        db, product_id=product_id, store_id=store_id, category=category, start_date=start_date, end_date=end_date
+        db,
+        product_id=product_id,
+        store_id=store_id,
+        category=category,
+        start_date=start_date,
+        end_date=end_date,
+        source=source,
+        genuine_only=genuine_only,
     )
     page = rows[offset : offset + limit]
     items = [
@@ -142,7 +161,13 @@ def get_sales_records(
             price=r.price,
             discount=r.discount,
             holiday_promotion=r.holiday_promotion,
+            source=r.source,
         )
         for r in page
     ]
     return SalesListResponse(items=items, count=len(rows), limit=limit, offset=offset)
+
+
+def get_sales_sources_summary(db: Session):
+    return sales_repository.get_sales_sources_summary(db)
+

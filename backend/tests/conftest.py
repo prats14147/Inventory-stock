@@ -27,3 +27,12 @@ def reference_df() -> pd.DataFrame:
     doesn't share any code with the app itself.
     """
     return pd.read_csv(PROCESSED_PATH, parse_dates=["Date"])
+
+
+@pytest.fixture(autouse=True)
+def mock_auth(monkeypatch):
+    """Bypasses token verification in tests by setting identity to admin operator."""
+    monkeypatch.setattr("app.main.require_request_identity", lambda req: "admin")
+    monkeypatch.setattr("app.security.get_token_identity", lambda token: "admin")
+
+

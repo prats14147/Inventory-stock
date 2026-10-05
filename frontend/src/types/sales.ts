@@ -14,6 +14,7 @@ export interface DailySaleRow {
   weather_condition: string;
   competitor_pricing: number;
   seasonality: string;
+  source: string;
 }
 
 export interface ProductSalesRank {
@@ -48,3 +49,27 @@ export interface StoreSalesSummary {
   store_id: string;
   total_units_sold: number;
 }
+
+export interface CsvRowError {
+  row: number;
+  key?: string | null;
+  reason: string;
+  error_type: "validation" | "duplicate";
+}
+
+export interface BulkImportResponse {
+  total_rows: number;
+  imported_count: number;
+  duplicates_count: number;
+  invalid_count: number;
+  errors: CsvRowError[];
+}
+
+export interface SalesSourcesSummaryResponse {
+  total_sales_count: number;
+  sample_data_count: number;
+  genuine_sales_count: number;
+  real_manual_count: number;
+  real_csv_import_count: number;
+}
+

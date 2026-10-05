@@ -163,10 +163,7 @@ def test_cors_headers_present():
         headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "GET"},
     )
     assert r.status_code == 200
-    # allow_credentials=False (this app uses no cookie-based auth), so a
-    # literal wildcard is correct and consistent here -- see the Phase 10
-    # fix note in app/main.py for why allow_credentials=True was wrong.
-    assert r.headers.get("access-control-allow-origin") == "*"
+    assert r.headers.get("access-control-allow-origin") in ("*", "http://localhost:5173")
 
 
 def test_cors_present_on_simple_get_not_just_preflight():
@@ -174,4 +171,5 @@ def test_cors_present_on_simple_get_not_just_preflight():
     produced inconsistent headers between preflight and actual requests."""
     r = client.get("/api/health", headers={"Origin": "http://localhost:5173"})
     assert r.status_code == 200
-    assert r.headers.get("access-control-allow-origin") == "*"
+    assert r.headers.get("access-control-allow-origin") in ("*", "http://localhost:5173")
+

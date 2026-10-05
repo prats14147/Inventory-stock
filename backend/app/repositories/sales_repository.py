@@ -19,6 +19,10 @@ def get_full_history_dataframe(db: Session) -> pd.DataFrame:
 
     Column names match data/processed/cleaned_inventory.csv so the same
     ml/features/build_features.py functions work on either source.
+
+    Filtered strictly to 'Sample Data' so that newly recorded genuine
+    sales (Real · Manual / Real · CSV Import) are never mixed with the
+    synthetic training dataset to prevent misleading forecasts.
     """
     stmt = (
         select(
@@ -43,6 +47,7 @@ def get_full_history_dataframe(db: Session) -> pd.DataFrame:
             & (DailyInventory.store_id == DailySales.store_id)
             & (DailyInventory.product_id == DailySales.product_id),
         )
+        .where(DailySales.source == "Sample Data")
         .order_by(DailySales.store_id, DailySales.product_id, DailySales.date)
     )
     rows = db.execute(stmt).all()
@@ -92,9 +97,21 @@ def get_full_history_dataframe_cached(db: Session) -> pd.DataFrame:
     return _history_cache
 
 
-def get_total_units_sold(db: Session, product_id: str) -> int:
+def get_total_units_sold(db: Session, product_id: str, source: str | None = None, genuine_only: bool = False) -> int:
     stmt = select(func.coalesce(func.sum(DailySales.units_sold), 0)).where(DailySales.product_id == product_id)
+    if source:
+        stmt = stmt.where(DailySales.source == source)
+    elif genuine_only:
+        stmt = stmt.where(DailySales.source.in_(["Real · Manual", "Real · CSV Import"]))
     return int(db.execute(stmt).scalar_one())
+
+
+def _apply_source_filter(stmt, source: str | None = None, genuine_only: bool = False):
+    if source:
+        stmt = stmt.where(DailySales.source == source)
+    elif genuine_only:
+        stmt = stmt.where(DailySales.source.in_(["Real · Manual", "Real · CSV Import"]))
+    return stmt
 
 
 def get_sales_rows(
@@ -104,6 +121,8 @@ def get_sales_rows(
     category: str | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
+    source: str | None = None,
+    genuine_only: bool = False,
 ) -> list[DailySales]:
     stmt = select(DailySales)
     if product_id:
@@ -116,7 +135,8 @@ def get_sales_rows(
         stmt = stmt.where(DailySales.date >= start_date)
     if end_date:
         stmt = stmt.where(DailySales.date <= end_date)
-    stmt = stmt.order_by(DailySales.date)
+    stmt = _apply_source_filter(stmt, source=source, genuine_only=genuine_only)
+    stmt = stmt.order_by(DailySales.date.desc(), DailySales.product_id)
     return list(db.execute(stmt).scalars().all())
 
 
@@ -126,6 +146,8 @@ def get_ranked_products_by_sales(
     ascending: bool = False,
     start_date: date | None = None,
     end_date: date | None = None,
+    source: str | None = None,
+    genuine_only: bool = False,
 ) -> list[dict]:
     stmt = select(
         DailySales.product_id,
@@ -136,6 +158,7 @@ def get_ranked_products_by_sales(
         stmt = stmt.where(DailySales.date >= start_date)
     if end_date:
         stmt = stmt.where(DailySales.date <= end_date)
+    stmt = _apply_source_filter(stmt, source=source, genuine_only=genuine_only)
 
     stmt = stmt.order_by(
         func.sum(DailySales.units_sold).asc() if ascending else func.sum(DailySales.units_sold).desc()
@@ -152,6 +175,8 @@ def get_sales_trend(
     category: str | None = None,
     start_date: date | None = None,
     end_date: date | None = None,
+    source: str | None = None,
+    genuine_only: bool = False,
 ) -> list[dict]:
     """
     granularity: "daily", "weekly", or "monthly".
@@ -181,30 +206,58 @@ def get_sales_trend(
         stmt = stmt.where(DailySales.date >= start_date)
     if end_date:
         stmt = stmt.where(DailySales.date <= end_date)
+    stmt = _apply_source_filter(stmt, source=source, genuine_only=genuine_only)
 
     stmt = stmt.order_by(bucket)
     return [dict(row._mapping) for row in db.execute(stmt).all()]
 
 
-def get_category_sales_summary(db: Session) -> list[dict]:
+def get_category_sales_summary(
+    db: Session,
+    source: str | None = None,
+    genuine_only: bool = False,
+) -> list[dict]:
     stmt = (
         select(
             DailySales.category,
             func.sum(DailySales.units_sold).label("total_units_sold"),
         )
         .group_by(DailySales.category)
-        .order_by(func.sum(DailySales.units_sold).desc())
     )
+    stmt = _apply_source_filter(stmt, source=source, genuine_only=genuine_only)
+    stmt = stmt.order_by(func.sum(DailySales.units_sold).desc())
     return [dict(row._mapping) for row in db.execute(stmt).all()]
 
 
-def get_store_sales_summary(db: Session) -> list[dict]:
+def get_store_sales_summary(
+    db: Session,
+    source: str | None = None,
+    genuine_only: bool = False,
+) -> list[dict]:
     stmt = (
         select(
             DailySales.store_id,
             func.sum(DailySales.units_sold).label("total_units_sold"),
         )
         .group_by(DailySales.store_id)
-        .order_by(func.sum(DailySales.units_sold).desc())
     )
+    stmt = _apply_source_filter(stmt, source=source, genuine_only=genuine_only)
+    stmt = stmt.order_by(func.sum(DailySales.units_sold).desc())
     return [dict(row._mapping) for row in db.execute(stmt).all()]
+
+
+def get_sales_sources_summary(db: Session) -> dict:
+    """Summarizes counts and breakdown between sample data and genuine sales."""
+    stmt = select(DailySales.source, func.count()).group_by(DailySales.source)
+    counts = dict(db.execute(stmt).all())
+    sample_count = counts.get("Sample Data", 0)
+    manual_count = counts.get("Real · Manual", 0)
+    csv_count = counts.get("Real · CSV Import", 0)
+    return {
+        "total_sales_count": sum(counts.values()),
+        "sample_data_count": sample_count,
+        "genuine_sales_count": manual_count + csv_count,
+        "real_manual_count": manual_count,
+        "real_csv_import_count": csv_count,
+    }
+

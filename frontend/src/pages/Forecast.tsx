@@ -38,6 +38,29 @@ export default function Forecast() {
         subtitle="XGBoost forecast per product, broken down by store. Pick a product to see expected demand."
       />
 
+      <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 shadow-sm text-amber-900" role="alert">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex-shrink-0 rounded-lg bg-amber-200 p-1.5 text-amber-800">
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <div className="space-y-1.5 text-sm">
+            <h3 className="font-semibold text-amber-950 flex items-center gap-2">
+              <span>Synthetic Dataset Notice</span>
+              <span className="rounded bg-amber-200 px-2 py-0.5 text-xs font-medium text-amber-900">Baseline +~5% Only</span>
+            </h3>
+            <p className="leading-relaxed text-amber-800">
+              Demand forecasts are generated using an XGBoost model trained strictly on the <strong>synthetic sample dataset (2022–2024)</strong>.
+              According to project documentation, this model outperforms its naive 7-day moving average baseline by only <strong>approximately 5%</strong> (MAE ~88.5 vs baseline ~93.4) with high sMAPE (~72–74%), due to weak price/promotion signals in the synthetic generating process.
+            </p>
+            <p className="text-xs text-amber-700">
+              <strong>Data Isolation:</strong> Genuine sales entered manually (<code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-amber-900">Real · Manual</code>) or imported via CSV (<code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-amber-900">Real · CSV Import</code>) are stored separately and are not mixed into this synthetic pipeline to prevent misleading forecasts.
+            </p>
+          </div>
+        </div>
+      </div>
+
       <Card>
         <div className="flex flex-wrap items-end gap-4">
           <label className="flex flex-col text-sm font-medium text-gray-700">
@@ -81,12 +104,23 @@ export default function Forecast() {
 
       {forecast.data && (
         <div className="space-y-4">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Total forecast demand"
               value={`${forecast.data.forecast_total_units.toFixed(0)} units`}
               hint={`by ${forecast.data.target_date}`}
               accent="info"
+            />
+            <StatCard
+              label="Data source"
+              value="Synthetic 2022-2024"
+              hint="Pure sample dataset (Real sales excluded)"
+              accent="warning"
+            />
+            <StatCard
+              label="Model test MAE"
+              value={forecast.data.model_test_mae.toFixed(1)}
+              hint={`Outperforms baseline by ~${forecast.data.baseline_improvement_pct ?? 5}%`}
             />
             <StatCard
               label="Model horizon used"
@@ -97,11 +131,6 @@ export default function Forecast() {
                   : "Matches your request"
               }
               accent={forecast.data.model_horizon_days !== forecast.data.requested_horizon_days ? "warning" : "default"}
-            />
-            <StatCard
-              label="Model test MAE"
-              value={forecast.data.model_test_mae.toFixed(1)}
-              hint="Lower is better; see docs/limitations.md"
             />
           </div>
 
