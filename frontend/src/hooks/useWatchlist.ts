@@ -102,6 +102,7 @@ export function useWatchlist(): WatchlistState {
       setLocalError(error);
     } finally {
       pending.delete(productId);
+      emit(ids);
       forceRender((n) => n + 1);
     }
   }, []);

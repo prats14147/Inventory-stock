@@ -2,6 +2,7 @@
 
 Revision ID: 0ab8b7d097ac
 Revises: a1b2c3d4e5f6
+Create Date: 2026-10-05
 """
 
 from alembic import op
@@ -16,22 +17,36 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add the new catalog columns as nullable first because the existing
+    # Add the new catalog columns as nullable first because
     # products already exist in the database.
     op.add_column(
         "products",
-        sa.Column("name", sa.String(length=100), nullable=True),
-    )
-    op.add_column(
-        "products",
-        sa.Column("sku", sa.String(length=50), nullable=True),
-    )
-    op.add_column(
-        "products",
-        sa.Column("category", sa.String(length=50), nullable=True),
+        sa.Column(
+            "name",
+            sa.String(length=100),
+            nullable=True,
+        ),
     )
 
-    # Update the existing products with application-level catalog details.
+    op.add_column(
+        "products",
+        sa.Column(
+            "sku",
+            sa.String(length=50),
+            nullable=True,
+        ),
+    )
+
+    op.add_column(
+        "products",
+        sa.Column(
+            "category",
+            sa.String(length=50),
+            nullable=True,
+        ),
+    )
+
+    # Populate the products that are part of the new canonical catalog.
     catalog = [
         ("P0001", "Wireless Headphones", "WH-001", "Electronics"),
         ("P0002", "Cotton T-Shirt", "TS-002", "Clothing"),
@@ -73,20 +88,39 @@ def upgrade() -> None:
             )
         )
 
-    # Make the catalog fields required after the existing products
-    # have been populated.
+    # Existing databases may contain additional products that were not
+    # part of the new 20-product catalog. Give those rows safe fallback
+    # values so the new columns can still become NOT NULL.
+    #
+    # product_id is already unique, so using it as the fallback SKU keeps
+    # the new unique constraint safe.
+    op.execute(
+        """
+        UPDATE products
+        SET name = COALESCE(name, 'Product ' || product_id),
+            sku = COALESCE(sku, product_id),
+            category = COALESCE(category, 'Uncategorized')
+        WHERE name IS NULL
+           OR sku IS NULL
+           OR category IS NULL
+        """
+    )
+
+    # At this point every existing product has values.
     op.alter_column(
         "products",
         "name",
         existing_type=sa.String(length=100),
         nullable=False,
     )
+
     op.alter_column(
         "products",
         "sku",
         existing_type=sa.String(length=50),
         nullable=False,
     )
+
     op.alter_column(
         "products",
         "category",
@@ -103,7 +137,23 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_products_sku", "products", type_="unique")
-    op.drop_column("products", "category")
-    op.drop_column("products", "sku")
-    op.drop_column("products", "name")
+    op.drop_constraint(
+        "uq_products_sku",
+        "products",
+        type_="unique",
+    )
+
+    op.drop_column(
+        "products",
+        "category",
+    )
+
+    op.drop_column(
+        "products",
+        "sku",
+    )
+
+    op.drop_column(
+        "products",
+        "name",
+    )

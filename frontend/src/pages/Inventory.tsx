@@ -154,6 +154,17 @@ export default function Inventory() {
       }
     });
 
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(
+        FAVORITE_ROWS_STORAGE_KEY,
+        JSON.stringify(selectedFavoriteRows)
+      );
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [selectedFavoriteRows]);
+
   const [formOpen, setFormOpen] =
     useState(false);
 
@@ -194,20 +205,6 @@ export default function Inventory() {
   useEffect(() => {
     setProductFilter(urlProduct);
   }, [urlProduct]);
-
-  /*
-   * Persist the selected Inventory rows for this browser session.
-   */
-  useEffect(() => {
-    try {
-      window.sessionStorage.setItem(
-        FAVORITE_ROWS_STORAGE_KEY,
-        JSON.stringify(selectedFavoriteRows)
-      );
-    } catch {
-      // Ignore storage errors.
-    }
-  }, [selectedFavoriteRows]);
 
   /*
    * Update the visually selected row for one product.
@@ -1638,121 +1635,97 @@ export default function Inventory() {
                 </thead>
 
                 <tbody className="divide-y divide-gray-100">
-                  {paged.map(
-                    (row) => {
-                      const product =
-                        productMap.get(
-                          row.product_id
-                        );
+                  {paged.map((row) => {
+                    const product =
+                      productMap.get(row.product_id);
 
-                      const displayCategory =
-                        product?.category ??
-                        row.category;
+                    const displayCategory =
+                      product?.category ?? row.category;
 
-                      return (
-                        <tr
-                          key={`${row.store_id}-${row.product_id}`}
-                          className="transition-colors hover:bg-brand-50/50"
-                        >
-                          <td className="px-4 py-2 font-medium text-gray-900">
-                            <div>
-                              {product?.name ??
-                                row.product_id}
-                            </div>
+                    return (
+                      <tr
+                        key={`${row.store_id}-${row.product_id}`}
+                        className="transition-colors hover:bg-brand-50/50"
+                      >
+                        <td className="px-4 py-2 font-medium text-gray-900">
+                          <div>
+                            {product?.name ??
+                              row.product_id}
+                          </div>
 
-                            <div className="text-xs font-normal text-gray-500">
-                              {
+                          <div className="text-xs font-normal text-gray-500">
+                            {row.product_id}
+
+                            {product?.sku
+                              ? ` · ${product.sku}`
+                              : ""}
+                          </div>
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-2 text-gray-600">
+                          {displayCategory}
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-2 text-gray-600">
+                          {row.region}
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-2 text-gray-600">
+                          {row.store_id}
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-900">
+                          {row.inventory_level}
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-600">
+                          {row.units_ordered}
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-2">
+                          {row.inventory_level < 50 ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-inset ring-amber-600/20">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                              Low
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800 ring-1 ring-inset ring-green-600/20">
+                              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                              OK
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="whitespace-nowrap px-4 py-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              beginEdit(row)
+                            }
+                            className="mr-2 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                          >
+                            Edit stock
+                          </button>
+
+                          <PinButton
+                            productId={row.product_id}
+                            rowKey={`${row.product_id}-${row.store_id}`}
+                            selectedRowKey={
+                              selectedFavoriteRows[
                                 row.product_id
-                              }
-
-                              {product?.sku
-                                ? ` · ${product.sku}`
-                                : ""}
-                            </div>
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-2 text-gray-600">
-                            {
-                              displayCategory
+                              ] ?? null
                             }
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-2 text-gray-600">
-                            {
-                              row.region
-                            }
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-2 text-gray-600">
-                            {
-                              row.store_id
-                            }
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-900">
-                            {
-                              row.inventory_level
-                            }
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-600">
-                            {
-                              row.units_ordered
-                            }
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-2">
-                            {row.inventory_level <
-                            50 ? (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-inset ring-amber-600/20">
-                                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                                Low
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-800 ring-1 ring-inset ring-green-600/20">
-                                <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
-                                OK
-                              </span>
-                            )}
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-2 text-right">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                beginEdit(
-                                  row
-                                )
-                              }
-                              className="mr-2 rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                            >
-                              Edit stock
-                            </button>
-
-                            <PinButton
-                              productId={
-                                row.product_id
-                              }
-                              rowKey={`${row.product_id}-${row.store_id}`}
-                              selectedRowKey={
-                                selectedFavoriteRows[
-                                  row.product_id
-                                ] ?? null
-                              }
-                              onRowSelected={(
+                            onRowSelected={(rowKey) =>
+                              handleFavoriteRowSelected(
+                                row.product_id,
                                 rowKey
-                              ) =>
-                                handleFavoriteRowSelected(
-                                  row.product_id,
-                                  rowKey
-                                )
-                              }
-                            />
-                          </td>
-                        </tr>
-                      );
-                    }
-                  )}
+                              )
+                            }
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1762,7 +1735,7 @@ export default function Inventory() {
               <div className="mt-3">
                 <EmptyState
                   title="No matching rows."
-                  hint="Try widening the filters — e.g. clear the search box, the product filter, or the low-stock-onlyilter."
+                  hint="Try widening the filters — e.g. clear the search box, the product filter, or the low-stock-only filter."
                 />
               </div>
             )}

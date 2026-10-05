@@ -102,7 +102,10 @@ def record_sale(
     stock.category = payload.category
     stock.region = payload.region
 
-    sale = db.get(DailySales, (sale_date, payload.store_id, payload.product_id))
+    sale = db.get(
+        DailySales,
+        (sale_date, payload.store_id, payload.product_id),
+    )
     if sale is not None and sale.source == "Sample Data":
         raise InvalidRequestError(
             f"Cannot overwrite historical sample data on {sale_date}. Keep existing sample data unchanged."
@@ -452,7 +455,6 @@ def list_stock_movements(
 
     return db.scalars(query).all()
 
-
 @router.get("", response_model=list[DailySaleRow])
 def list_sales(
     product_id: str | None = None,
@@ -488,7 +490,14 @@ def top_products(
     genuine_only: bool = False,
     db: Session = Depends(get_db),
 ):
-    return sales_service.get_top_products(db, limit=limit, start_date=start_date, end_date=end_date, source=source, genuine_only=genuine_only)
+    return sales_service.get_top_products(
+        db,
+        limit=limit,
+        start_date=start_date,
+        end_date=end_date,
+        source=source,
+        genuine_only=genuine_only,
+    )
 
 
 @router.get("/bottom-products", response_model=TopProductsResponse)
@@ -500,7 +509,14 @@ def bottom_products(
     genuine_only: bool = False,
     db: Session = Depends(get_db),
 ):
-    return sales_service.get_bottom_products(db, limit=limit, start_date=start_date, end_date=end_date, source=source, genuine_only=genuine_only)
+    return sales_service.get_bottom_products(
+        db,
+        limit=limit,
+        start_date=start_date,
+        end_date=end_date,
+        source=source,
+        genuine_only=genuine_only,
+    )
 
 
 @router.get("/trends", response_model=SalesTrendResponse)
@@ -531,20 +547,29 @@ def trends(
     )
 
 
-@router.get("/by-category", response_model=list[CategorySalesSummary])
+@router.get(
+    "/by-category",
+    response_model=list[CategorySalesSummary],
+)
 def by_category(
     source: str | None = None,
     genuine_only: bool = False,
     db: Session = Depends(get_db),
 ):
-    return sales_service.get_category_analysis(db, source=source, genuine_only=genuine_only)
+    return sales_service.get_category_analysis(
+        db, source=source, genuine_only=genuine_only
+    )
 
 
-@router.get("/by-store", response_model=list[StoreSalesSummary])
+@router.get(
+    "/by-store",
+    response_model=list[StoreSalesSummary],
+)
 def by_store(
     source: str | None = None,
     genuine_only: bool = False,
     db: Session = Depends(get_db),
 ):
-    return sales_service.get_store_analysis(db, source=source, genuine_only=genuine_only)
-
+    return sales_service.get_store_analysis(
+        db, source=source, genuine_only=genuine_only
+    )

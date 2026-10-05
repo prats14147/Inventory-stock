@@ -9,9 +9,7 @@ interface Props {
   // Inventory row-specific favorite state
   rowKey?: string;
   selectedRowKey?: string | null;
-  onRowSelected?: (
-    rowKey: string | null
-  ) => void;
+  onRowSelected?: (rowKey: string | null) => void;
 }
 
 export default function PinButton({
@@ -22,28 +20,12 @@ export default function PinButton({
   selectedRowKey = null,
   onRowSelected,
 }: Props) {
-  const {
-    isPinned,
-    toggle,
-  } = useWatchlist();
+  const { isPinned, toggle } = useWatchlist();
+  const [busy, setBusy] = useState(false);
 
-  const [busy, setBusy] =
-    useState(false);
+  const productPinned = isPinned(productId);
+  const hasRowSelection = rowKey !== undefined;
 
-  const productPinned =
-    isPinned(productId);
-
-  const hasRowSelection =
-    rowKey !== undefined;
-
-  /*
-   * Outside Inventory:
-   *   pinned = backend watchlist state.
-   *
-   * Inside Inventory:
-   *   pinned = backend product is pinned AND
-   *            this exact row is the selected row.
-   */
   const pinned = useMemo(() => {
     if (!hasRowSelection) {
       return productPinned;
@@ -65,14 +47,8 @@ export default function PinButton({
       return;
     }
 
-    /*
-     * Normal product-level PinButton
-     * used outside Inventory.
-     */
-    if (
-      !hasRowSelection ||
-      !rowKey
-    ) {
+    // Normal product-level button outside Inventory.
+    if (!hasRowSelection || !rowKey) {
       try {
         setBusy(true);
         await toggle(productId);
@@ -83,12 +59,7 @@ export default function PinButton({
       return;
     }
 
-    /*
-     * Product is not yet in the backend watchlist.
-     *
-     * Select this exact Inventory row and
-     * add the product to the watchlist.
-     */
+    // Product is not pinned yet: select this row and pin the product.
     if (!productPinned) {
       onRowSelected?.(rowKey);
 
@@ -102,16 +73,8 @@ export default function PinButton({
       return;
     }
 
-    /*
-     * Product is already pinned and this exact
-     * row is currently selected.
-     *
-     * Clicking again removes the product from
-     * the backend watchlist.
-     */
-    if (
-      selectedRowKey === rowKey
-    ) {
+    // This exact row is already selected: unpin the product.
+    if (selectedRowKey === rowKey) {
       onRowSelected?.(null);
 
       try {
@@ -124,14 +87,7 @@ export default function PinButton({
       return;
     }
 
-    /*
-     * Product is already pinned, but another
-     * Inventory row for the same product was clicked.
-     *
-     * Move the visual star only.
-     *
-     * DO NOT call toggle() here.
-     */
+    // Same product, different store row: move only the visual selection.
     onRowSelected?.(rowKey);
   }
 
@@ -153,17 +109,12 @@ export default function PinButton({
             : "border-gray-300 bg-white text-gray-600 hover:bg-gray-50"
         } disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
       >
-        <span
-          aria-hidden="true"
-          className="text-lg leading-none"
-        >
+        <span aria-hidden="true" className="text-lg leading-none">
           {pinned ? "★" : "☆"}
         </span>
 
         <span>
-          {pinned
-            ? "Favorited"
-            : "Favorite"}
+          {pinned ? "Favorited" : "Favorite"}
         </span>
       </button>
     );
@@ -176,11 +127,7 @@ export default function PinButton({
       disabled={busy}
       aria-label={buttonLabel}
       aria-pressed={pinned}
-      title={
-        pinned
-          ? "Remove from favorites"
-          : "Add to favorites"
-      }
+      title={pinned ? "Remove from favorites" : "Add to favorites"}
       className={`inline-flex h-8 w-8 items-center justify-center rounded-md transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
     >
       <span
