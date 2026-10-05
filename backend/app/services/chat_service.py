@@ -48,10 +48,11 @@ from app.nlp import (
 )
 from app.nlp.entities import Entities
 from app.nlp.intent import PRODUCT_REQUIRED_INTENTS, Intent
+from app.nlp.request_planner import plan_request, prefer_explicit_stock_action
 from app.nlp.llm_client import LLMUnavailableError
 from app.nlp.prompts import RESPONSE_GENERATION_SYSTEM_PROMPT
 from app.nlp.rules import extract_entities, is_stock_write_request, looks_like_follow_up
-from app.nlp.tool_registry import TOOL_DEFINITIONS
+from app.nlp.tool_registry import TOOL_DEFINITIONS, TOOLS_BY_NAME
 from app.repositories import product_repository
 from app.models import DailyInventory, DailySales, Product
 from app.models.stock_movement import StockMovement
@@ -74,28 +75,41 @@ HELP_TEXT = (
     "sales trends, revenue, and store gross profit/loss by product/store/category and time period, forecasts, stockout "
     "risk, and reorder quantities. Try \"How many units did P0001 sell last week?\" "
     "or \"Show weekly sales for P0001 at S001 this month.\" Profit uses costs saved with recorded sales; older "
-    "imported sales without costs are excluded. You can also say "
-    "\"record a sale of 3 units of P0001 at S001\"; "
-    "I will show you the details and ask you to confirm before changing stock."
+    "imported sales without costs are excluded. For stock changes, say "
+    "\"received 10 units of P0001 at S001\" or \"I sold 3 units of P0001 at S001\". "
+    "If you say \"deduct\" or \"remove\", I will ask whether it was a sale or another kind of adjustment. "
+    "I show a confirmation preview before changing stock."
 )
 
 _SALE_QUANTITY_RE = re.compile(
     r"\b(?:sold|sale\s+of|sell|deduct|remove|subtract|reduce)\s+(?:about\s+|around\s+|approximately\s+)?(\d+)\s*(?:units?|items?|stocks?|stoks?)?\b|"
-    r"\b(\d+)\s*(?:units?|items?|stocks?|stoks?)\b", re.I,
+    r"\b(\d+)\s*(?:units?|items?|products?|stocks?|stoks?)\b", re.I,
 )
-_SALE_PRICE_RE = re.compile(r"\b(?:price|at)\s*\$?\s*(\d+(?:\.\d{1,2})?)\b|\$\s*(\d+(?:\.\d{1,2})?)", re.I)
+_SALE_PRICE_RE = re.compile(
+    r"\b(?:unit\s+)?price\s*(?:is|of|:|=)?\s*\$?\s*(\d+(?:\.\d{1,2})?)\b|"
+    r"\b(?:at|for)\s+\$?\s*(\d+(?:\.\d{1,2})?)\b|\$\s*(\d+(?:\.\d{1,2})?)",
+    re.I,
+)
 _SALE_COST_RE = re.compile(r"\bcost(?:\s+price)?\s*(?:is|of|:|=)?\s*\$?\s*(\d+(?:\.\d{1,2})?)\b", re.I)
 _SALE_REQUEST_RE = re.compile(
     r"\b(?:(?:i|we)\s+(?:just\s+)?sold|record\s+(?:a\s+)?sale|log\s+(?:a\s+)?sale)\b|"
-    r"\b(?:i|we)\s+(?:just\s+)?sold\s+(?:about\s+|around\s+)?\d+\s+(?:stocks?|items?)\b", re.I,
+    r"\b(?:i|we)\s+(?:just\s+)?sold\s+(?:about\s+|around\s+)?\d+\s+(?:stocks?|items?|products?)\b|"
+    r"\b\d+\s+(?:units?|items?|products?|stocks?|stoks?)\s+(?:of\s+)?(?:product\s+)?P0*\d+\b"
+    r".{0,80}\b(?:(?:was|were|has\s+been|have\s+been)\s+)?sold\b|"
+    r"\b(?:sold\s+to\s+(?:a\s+)?(?:customer|cutomer)|(?:customer|cutomer)\s+(?:bought|purchased))\b", re.I,
 )
 _INVENTORY_ACTION_RE = re.compile(
     r"\b(?:receiv(?:e|ed|ing)|reciev(?:e|ed|ing)|restock(?:ed|ing)?|deliver(?:ed|ing)?|damag(?:e|ed)|broken|expired|wast(?:e|ed)|"
-    r"remove|subtract|reduce|decrease|deduct|adjust|add\s+(?:stock|inventory))\b", re.I
+    r"remove|subtract|reduce|decrease|deduct|adjust|add\s+(?:stocks?|inventory))\b", re.I
 )
 _RECEIVE_ACTION_RE = re.compile(
     r"\b(?:receiv(?:e|ed|ing)|reciev(?:e|ed|ing)|restock(?:ed|ing)?|deliver(?:ed|ing)?|"
-    r"add\s+(?:(?:\w+\s+){0,4})?(?:stock|inventory|product\s+quantity|quantity))\b", re.I
+    r"add\s+(?:(?:\w+\s+){0,4})?(?:stocks?|inventory|product\s+quantity|quantity)|"
+    r"add\s+(?:(?:about|around|approximately)\s+)?\d+\s*(?:units?|items?|stocks?))\b", re.I
+)
+_STOCK_REDUCTION_ACTION_RE = re.compile(
+    r"\b(?:deduct|remove|subtract|reduce|decrease|damage(?:d)?|broken|expired|wast(?:e|ed)|lost|missing)\b",
+    re.I,
 )
 _STOCK_HISTORY_QUERY_RE = re.compile(
     r"\b(?:stock|inventory)\s+(?:history|movements?|changes|adjustments?)\b|"
@@ -103,6 +117,16 @@ _STOCK_HISTORY_QUERY_RE = re.compile(
     re.I,
 )
 _ACTION_QUANTITY_RE = re.compile(r"\b(\d+)\s*(?:units?|items?)?\b", re.I)
+_SEMANTIC_STOCK_VERB_RE = re.compile(
+    r"\b(?:put|place|bring|got|arrived|increase|increased|bump|bumped|top\s+up|"
+    r"take\s+(?:off|out)|knock\s+off|add|receive|received|recieved|sell|sold|"
+    r"deduct|remove|subtract|reduce|decrease)\b",
+    re.I,
+)
+_SEMANTIC_STOCK_OBJECT_RE = re.compile(
+    r"\b(?:stock|stocks|inventory|units?|items?|quantity|shelf|shelves|on.hand)\b|\b[PS]\d+\b",
+    re.I,
+)
 _PROJECT_QUESTION_RE = re.compile(
     r"\b(?:explain|how does (?:the )?(?:chatbot|model|forecast page|system)|"
     r"how is (?:the )?(?:demand )?forecast(?:ing)?(?: model)?|how is (?:the )?(?:stockout risk|reorder)|"
@@ -114,7 +138,11 @@ _PROJECT_QUESTION_RE = re.compile(
 )
 _YES_RE = re.compile(r"^(?:yes(?: please)?|y|confirm(?: sale)?|record it|do it|go ahead|proceed|confirmed|please confirm)[.! ]*$", re.I)
 _NO_RE = re.compile(r"^(?:no(?: thanks)?|n|cancel(?: sale)?|stop|don't|do not|not now)[.! ]*$", re.I)
-_SALE_CLARIFICATION_RE = re.compile(r"\b(?:for\s+)?sales?\b|\b(?:it was|that was)\s+(?:a\s+)?sale\b", re.I)
+_SALE_CLARIFICATION_RE = re.compile(
+    r"\b(?:for\s+)?sales?\b|\b(?:it was|that was)\s+(?:a\s+)?sale\b|"
+    r"\bsold\s+to\s+(?:a\s+)?(?:customer|cutomer)\b|\b(?:customer|cutomer)\s+(?:bought|purchased)\b",
+    re.I,
+)
 _ADJUSTMENT_CLARIFICATION_RE = re.compile(r"\b(?:not\s+(?:a\s+)?sale|adjustment|damaged?|broken|expired|wasted?|lost|missing|non[- ]?sale)\b", re.I)
 
 
@@ -749,17 +777,12 @@ class ChatSessionManager:
         if stock is None:
             return f"There is no current stock record for {draft['product_id']} at {draft['store_id']}. No sale was recorded.", {"sale_status": "no_stock_record"}, Intent.RECORD_SALE
         if draft["price"] is None:
-            previous_sale = db.scalar(select(DailySales).where(
-                DailySales.product_id == draft["product_id"], DailySales.store_id == draft["store_id"]
-            ).order_by(DailySales.date.desc()).limit(1))
-            if previous_sale is not None:
-                draft["price"] = float(previous_sale.price)
-            else:
-                session.metadata["pending_sale"] = draft
-                self.session_store.save_session(session)
-                return "What was the unit selling price? I need it for sales history; stock has not changed.", {
-                    "sale_status": "collecting_details", "pending_sale": {**draft, "awaiting_field": "price"},
-                }, Intent.RECORD_SALE
+            session.metadata["pending_sale"] = {**draft, "awaiting_field": "price"}
+            self.session_store.save_session(session)
+            return ("What was the actual selling price per unit for this customer sale? "
+                    "I won't reuse a price from an older sale; stock has not changed."), {
+                "sale_status": "collecting_details", "pending_sale": {**draft, "awaiting_field": "price"},
+            }, Intent.RECORD_SALE
         if draft["unit_cost"] is None:
             product = db.get(Product, draft["product_id"])
             if product is not None and product.cost_price is not None:
@@ -806,8 +829,10 @@ class ChatSessionManager:
                 )
             except (InvalidRequestError, NotFoundError) as exc:
                 db.rollback()
-                return f"I couldn't apply that stock change: {exc} Please correct the details or cancel it.", {
-                    "adjustment_status": "needs_attention", "pending_adjustment": pending,
+                session.metadata.pop("pending_stock_adjustment", None)
+                self.session_store.save_session(session)
+                return f"I couldn't apply that stock change: {exc} No stock was changed. Please submit a corrected request.", {
+                    "adjustment_status": "needs_attention", "error": str(exc),
                 }, Intent.ADJUST_STOCK
             session.metadata.pop("pending_stock_adjustment", None)
             self.session_store.save_session(session)
@@ -835,7 +860,7 @@ class ChatSessionManager:
         quantity = int(quantity_match.group(1)) if quantity_match else pending.get("quantity")
         product_id = entities.product_id or pending.get("product_id")
         store_id = entities.store_id or pending.get("store_id")
-        reason_match = re.search(r"\b(damaged|damage|broken|expired|waste|wasted|lost|missing)\b", message, re.I)
+        reason_match = re.search(r"\b(damaged|damage|broken|expired|waste|wasted|lost|missing|correction|corrected)\b", message, re.I)
         reason = ("Stock received" if receives else
                   f"Stock {reason_match.group(1).lower()}" if reason_match else
                   pending.get("reason", "Manual stock reduction"))
@@ -953,6 +978,30 @@ class ChatSessionManager:
         pending_sale = session.metadata.get("pending_sale") or {}
         pending_adjustment = session.metadata.get("pending_stock_adjustment") or {}
         pending_clarification = session.metadata.get("pending_action_clarification") or {}
+        planned_request = None
+
+        # Let Gemini interpret fresh turns before keyword routing. Follow-up
+        # answers and confirmations stay deterministic so the model cannot
+        # reinterpret "yes", a quantity, or a clarification as a new request.
+        if not (pending_sale or pending_adjustment):
+            planned_request = plan_request(message, self.llm_client, cm.get_context_for_llm())
+            planned_request = prefer_explicit_stock_action(message, planned_request)
+
+        # A new command in the opposite direction must not inherit the
+        # movement type from an earlier, unconfirmed preview. For example,
+        # "deduct 25 ..." after a pending delivery must start a new request,
+        # not reuse DELIVERY and turn the deduction into an addition.
+        incoming_receive = bool(_RECEIVE_ACTION_RE.search(message))
+        incoming_reduction = bool(_STOCK_REDUCTION_ACTION_RE.search(message))
+        pending_is_delivery = pending_adjustment.get("movement_type") == "DELIVERY"
+        if pending_adjustment and (
+            (pending_is_delivery and incoming_reduction)
+            or (not pending_is_delivery and incoming_receive)
+        ):
+            session.metadata.pop("pending_stock_adjustment", None)
+            pending_adjustment = {}
+            self.session_store.save_session(session)
+
         if pending_clarification and _SALE_CLARIFICATION_RE.search(message):
             session.metadata.pop("pending_action_clarification", None)
             product_id = pending_clarification.get("product_id")
@@ -960,6 +1009,7 @@ class ChatSessionManager:
             quantity = pending_clarification.get("quantity")
             sale_request = "I sold" + (f" {quantity} units" if quantity else "")
             sale_request += (f" of {product_id}" if product_id else "") + (f" at {store_id}" if store_id else "")
+            sale_request += f". {message}"
             response_text, data, intent = self._handle_chat_sale(db, session, sale_request)
             self._save_turn(session_id, message, response_text, intent, "rules", data, extract_entities(sale_request))
             return ConversationChatResponse(message=response_text, intent=intent,
@@ -999,6 +1049,58 @@ class ChatSessionManager:
             return ConversationChatResponse(message=response_text, intent=action_intent,
                 entities=extract_entities(message).model_dump(), parse_method="rules", data=data,
                 session_id=session_id, context=cm.get_context_for_llm())
+
+        # Structured action plans are proposals only. Reuse the established
+        # backend validation and preview/confirmation handlers for all writes.
+        if planned_request and planned_request.request_type in {"sale", "receive", "decrease"}:
+            proposed = planned_request.arguments
+            product_id = proposed.get("product_id") or pending_clarification.get("product_id")
+            store_id = proposed.get("store_id") or pending_clarification.get("store_id")
+            quantity = planned_request.quantity or pending_clarification.get("quantity")
+            quantity_text = f"{quantity} units" if quantity is not None else ""
+            product_text = f"of product {product_id}" if product_id else ""
+            store_text = f"at store {store_id}" if store_id else ""
+            details = " ".join(part for part in (quantity_text, product_text, store_text) if part)
+            source = message
+            session.metadata.pop("pending_action_clarification", None)
+            if planned_request.request_type == "sale" or (
+                planned_request.request_type == "decrease" and planned_request.reason == "sale"
+            ):
+                canonical = f"I sold {details}. {source}"
+                if planned_request.unit_price is not None and not _SALE_PRICE_RE.search(source):
+                    canonical += f" at ${planned_request.unit_price:.2f}"
+                if planned_request.unit_cost is not None and not _SALE_COST_RE.search(source):
+                    canonical += f" cost ${planned_request.unit_cost:.2f}"
+                response_text, data, action_intent = self._handle_chat_sale(db, session, canonical)
+            elif planned_request.request_type == "receive":
+                response_text, data, action_intent = self._handle_stock_adjustment(
+                    db, session, f"received {details}. {source}"
+                )
+            elif planned_request.reason in {"damage", "loss", "waste", "correction"}:
+                reason_words = {"damage": "damaged", "loss": "lost", "waste": "wasted", "correction": "manual correction"}
+                response_text, data, action_intent = self._handle_stock_adjustment(
+                    db, session, f"remove {details} {reason_words[planned_request.reason]}. {source}"
+                )
+            else:
+                clarification = {
+                    "message": source, "product_id": product_id,
+                    "store_id": store_id, "quantity": quantity,
+                }
+                session.metadata["pending_action_clarification"] = clarification
+                self.session_store.save_session(session)
+                response_text = (
+                    "I understood that you want to decrease stock. Were these units sold to a customer, "
+                    "or removed for another reason? I won't change anything until you clarify."
+                )
+                data = {"adjustment_status": "needs_action_type", "pending_action": clarification}
+                action_intent = Intent.UNKNOWN
+            if isinstance(data, dict):
+                data.setdefault("request_plan", planned_request.model_dump(mode="json"))
+            self._save_turn(session_id, message, response_text, action_intent, "gemini_plan", data,
+                            extract_entities(message))
+            return ConversationChatResponse(message=response_text, intent=action_intent,
+                entities=extract_entities(message).model_dump(), parse_method="gemini_plan", data=data,
+                session_id=session_id, context=cm.get_context_for_llm())
         if _RECEIVE_ACTION_RE.search(message) and not _STOCK_HISTORY_QUERY_RE.search(message):
             response_text, data, action_intent = self._handle_stock_adjustment(db, session, message)
             self._save_turn(session_id, message, response_text, action_intent, "rules", data, extract_entities(message))
@@ -1029,6 +1131,7 @@ class ChatSessionManager:
                 entities=extract_entities(message).model_dump(), parse_method="rules", data=data,
                 session_id=session_id, context=cm.get_context_for_llm())
 
+        # Deterministic stock routing remains available when Gemini is unavailable.
         if not _STOCK_HISTORY_QUERY_RE.search(message) and (
             _INVENTORY_ACTION_RE.search(message)
             or (pending_adjustment and _is_pending_adjustment_reply(message, pending_adjustment))
@@ -1056,7 +1159,9 @@ class ChatSessionManager:
 
         # Prefer checked-in documentation for explicit "how does this project
         # work?" questions so a generic analytics intent doesn't ask for an SKU.
-        if _PROJECT_QUESTION_RE.search(message) and not re.search(r"\bP0*\d{1,4}\b", message, re.I):
+        if (not (planned_request and planned_request.request_type == "read")
+                and _PROJECT_QUESTION_RE.search(message)
+                and not re.search(r"\bP0*\d{1,4}\b", message, re.I)):
             knowledge = project_knowledge_service.answer(message, self.llm_client)
             if knowledge:
                 response_text, data = knowledge["message"], knowledge["data"]
@@ -1068,9 +1173,14 @@ class ChatSessionManager:
         # 4. Parse message with context injection
         # First, inject context into entities
         _notify(on_stage, STAGE_PARSING)
-        intent, entities, method = parser.parse(
-            message, llm_client=self.llm_client, context=cm.get_context_for_llm()
-        )
+        if planned_request and planned_request.request_type == "read":
+            intent = TOOLS_BY_NAME[planned_request.tool].intent
+            entities = Entities(**planned_request.arguments)
+            method = "gemini_plan"
+        else:
+            intent, entities, method = parser.parse(
+                message, llm_client=None, context=cm.get_context_for_llm()
+            )
 
         # Inject conversation context (resolves pronouns, carries entities)
         entities = cm.inject_context(message, entities)
