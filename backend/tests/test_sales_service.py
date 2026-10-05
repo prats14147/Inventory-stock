@@ -82,7 +82,11 @@ def test_store_analysis_matches_reference(db, reference_df):
 def test_profitability_calculates_total_and_product_group_without_committing(db):
     suffix = uuid.uuid4().hex[:8]
     product_id, losing_product_id, store_id = f"T{suffix}", f"L{suffix}", f"T{suffix}"
-    db.add_all([Product(product_id=product_id), Product(product_id=losing_product_id), Store(store_id=store_id)])
+    db.add_all([
+        Product(product_id=product_id, name=f"Product {suffix}", sku=f"SKU-{suffix}", category="Testing"),
+        Product(product_id=losing_product_id, name=f"Product Loss {suffix}", sku=f"SKU-LOSS-{suffix}", category="Testing"),
+        Store(store_id=store_id),
+    ])
     db.flush()
     db.add(SalesTransaction(
         business_date=date.today(), store_id=store_id,

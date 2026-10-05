@@ -57,7 +57,7 @@ def test_delivery_and_damage_adjustments_change_stock_without_recording_sales(db
     suffix = uuid.uuid4().hex[:8]
     product_id, store_id = f"T{suffix}", f"T{suffix}"
     as_of = inventory_repository.get_latest_date(db) or date.today()
-    db.add_all([Product(product_id=product_id), Store(store_id=store_id)])
+    db.add_all([Product(product_id=product_id, name=f"Product {suffix}", sku=f"SKU-{suffix}", category="Testing"), Store(store_id=store_id)])
     stock = DailyInventory(date=as_of, store_id=store_id, product_id=product_id,
                            inventory_level=10, units_ordered=30, category="Testing", region="Test")
     db.add(stock)

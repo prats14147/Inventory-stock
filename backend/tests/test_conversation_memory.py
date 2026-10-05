@@ -624,7 +624,7 @@ def seed_test_database(db) -> None:
     from app.models import DailyInventory, DailySales, Product, Store
 
     for product_id in SEED_PRODUCTS:
-        db.add(Product(product_id=product_id))
+        db.add(Product(product_id=product_id, name=f"Product {product_id}", sku=f"SKU-{product_id}", category="Testing"))
     for store_id in SEED_STORES:
         db.add(Store(store_id=store_id))
 
