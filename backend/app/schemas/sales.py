@@ -20,6 +20,7 @@ class DailySaleRow(BaseModel):
     weather_condition: str
     competitor_pricing: float
     seasonality: str
+    source: str = "Sample Data"
 
 
 class ProductSalesRank(BaseModel):
@@ -65,6 +66,7 @@ class SalesRecord(BaseModel):
     price: float
     discount: int
     holiday_promotion: bool
+    source: str = "Sample Data"
 
 
 class RecordSaleRequest(BaseModel):
@@ -92,6 +94,7 @@ class RecordSaleResponse(BaseModel):
     remaining_inventory: int
     unit_cost: float | None = None
     gross_profit: float | None = None
+    source: str = "Real · Manual"
 
 
 class SalesListResponse(BaseModel):
@@ -99,3 +102,31 @@ class SalesListResponse(BaseModel):
     count: int
     limit: int
     offset: int
+
+
+class CsvRowError(BaseModel):
+    row: int
+    key: str | None = None
+    reason: str
+    error_type: str = "validation"  # "validation" or "duplicate"
+
+
+class BulkImportRequest(BaseModel):
+    csv_content: str | None = None
+    rows: list[dict] | None = None
+
+
+class BulkImportResponse(BaseModel):
+    total_rows: int
+    imported_count: int
+    duplicates_count: int
+    invalid_count: int
+    errors: list[CsvRowError]
+
+
+class SalesSourcesSummaryResponse(BaseModel):
+    total_sales_count: int
+    sample_data_count: int
+    genuine_sales_count: int
+    real_manual_count: int
+    real_csv_import_count: int

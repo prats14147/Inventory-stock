@@ -10,11 +10,13 @@ import type {
   StockMovement,
 } from "../types/inventory";
 import type {
+  BulkImportResponse,
   CategorySalesSummary,
   DailySaleRow,
+  SalesSourcesSummaryResponse,
   SalesTrendResponse,
-  StoreSalesSummary,
   StoreProfitabilityResponse,
+  StoreSalesSummary,
   TopProductsResponse,
 } from "../types/sales";
 import type { ForecastResponse } from "../types/forecast";
@@ -118,7 +120,6 @@ export const saveInventory = (payload: {
   inventory_level: number;
   units_ordered: number;
   cost_price?: number;
-  category?: string;
   region?: string;
 }) =>
   request<{
@@ -177,6 +178,8 @@ export const getSales = (
     category?: string;
     start_date?: string;
     end_date?: string;
+    source?: string;
+    genuine_only?: boolean;
     limit?: number;
   } = {}
 ) => request<DailySaleRow[]>(`/api/sales${qs(params)}`);
@@ -189,6 +192,7 @@ export const recordSale = (payload: {
   unit_cost?: number;
   category: string;
   region: string;
+  date?: string;
 }) => request<{
   date: string;
   product_id: string;
@@ -198,7 +202,17 @@ export const recordSale = (payload: {
   remaining_inventory: number;
   unit_cost: number | null;
   gross_profit: number | null;
+  source: string;
 }>("/api/sales/record", { method: "POST", body: JSON.stringify(payload) });
+
+export const bulkImportSales = (payload: { csv_content?: string; rows?: unknown[] }) =>
+  request<BulkImportResponse>("/api/sales/bulk-import", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const getSalesSourcesSummary = () =>
+  request<SalesSourcesSummaryResponse>("/api/sales/sources");
 
 export const getStoreProfitability = (params: {
   store_id?: string;
@@ -207,11 +221,27 @@ export const getStoreProfitability = (params: {
   end_date?: string;
 } = {}) => request<StoreProfitabilityResponse>(`/api/sales/profitability/by-store${qs(params)}`);
 
-export const getTopProducts = (limit = 10, start_date?: string, end_date?: string) =>
-  request<TopProductsResponse>(`/api/sales/top-products${qs({ limit, start_date, end_date })}`);
+export const getTopProducts = (
+  limit = 10,
+  start_date?: string,
+  end_date?: string,
+  source?: string,
+  genuine_only?: boolean
+) =>
+  request<TopProductsResponse>(
+    `/api/sales/top-products${qs({ limit, start_date, end_date, source, genuine_only })}`
+  );
 
-export const getBottomProducts = (limit = 10, start_date?: string, end_date?: string) =>
-  request<TopProductsResponse>(`/api/sales/bottom-products${qs({ limit, start_date, end_date })}`);
+export const getBottomProducts = (
+  limit = 10,
+  start_date?: string,
+  end_date?: string,
+  source?: string,
+  genuine_only?: boolean
+) =>
+  request<TopProductsResponse>(
+    `/api/sales/bottom-products${qs({ limit, start_date, end_date, source, genuine_only })}`
+  );
 
 export const getSalesTrend = (
   params: {
@@ -221,11 +251,16 @@ export const getSalesTrend = (
     category?: string;
     start_date?: string;
     end_date?: string;
+    source?: string;
+    genuine_only?: boolean;
   } = {}
 ) => request<SalesTrendResponse>(`/api/sales/trends${qs(params)}`);
 
-export const getSalesByCategory = () => request<CategorySalesSummary[]>("/api/sales/by-category");
-export const getSalesByStore = () => request<StoreSalesSummary[]>("/api/sales/by-store");
+export const getSalesByCategory = (params: { source?: string; genuine_only?: boolean } = {}) =>
+  request<CategorySalesSummary[]>(`/api/sales/by-category${qs(params)}`);
+
+export const getSalesByStore = (params: { source?: string; genuine_only?: boolean } = {}) =>
+  request<StoreSalesSummary[]>(`/api/sales/by-store${qs(params)}`);
 
 // --- Forecast ---
 export const getForecast = (productId: string, horizon?: number) =>

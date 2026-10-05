@@ -32,6 +32,9 @@ const REGIONS = ["North", "South", "East", "West"];
 
 const PAGE_SIZE = 20;
 
+const FAVORITE_ROWS_STORAGE_KEY =
+  "inventory:selectedFavoriteRows";
+
 type SortKey =
   | "product_id"
   | "category"
@@ -52,9 +55,21 @@ const COLUMNS: Array<{
   { key: "category", label: "Category" },
   { key: "region", label: "Region" },
   { key: "store_id", label: "Store" },
-  { key: "inventory_level", label: "Stock on Hand", numeric: true },
-  { key: "cost_price", label: "Unit Cost", numeric: true },
-  { key: "units_ordered", label: "Units Ordered", numeric: true },
+  {
+    key: "inventory_level",
+    label: "Stock on Hand",
+    numeric: true,
+  },
+  {
+    key: "cost_price",
+    label: "Unit Cost",
+    numeric: true,
+  },
+  {
+    key: "units_ordered",
+    label: "Units Ordered",
+    numeric: true,
+  },
 ];
 
 const MOVEMENT_TYPES = [
@@ -65,28 +80,126 @@ const MOVEMENT_TYPES = [
 ];
 
 export default function Inventory() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const urlProduct = searchParams.get("product") ?? "";
+  const [searchParams, setSearchParams] =
+    useSearchParams();
 
-  const [category, setCategory] = useState("");
-  const [productFilter, setProductFilter] = useState(urlProduct);
-  const [storeFilter, setStoreFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | "low">("all");
-  const [movementTypeFilter, setMovementTypeFilter] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
+  const urlProduct =
+    searchParams.get("product") ?? "";
 
-  const [formOpen, setFormOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
-  const [originalCostPrice, setOriginalCostPrice] = useState("");
+  const [category, setCategory] =
+    useState("");
 
-  const [movementType, setMovementType] = useState<
-    "DELIVERY" | "RETURN" | "MANUAL_CORRECTION"
-  >("DELIVERY");
+  const [productFilter, setProductFilter] =
+    useState(urlProduct);
 
-  const [quantityDelta, setQuantityDelta] = useState("");
-  const [movementReason, setMovementReason] = useState("");
+  const [storeFilter, setStoreFilter] =
+    useState("");
+
+  const [statusFilter, setStatusFilter] =
+    useState<"all" | "low">("all");
+
+  const [movementTypeFilter, setMovementTypeFilter] =
+    useState("");
+
+  const [refreshKey, setRefreshKey] =
+    useState(0);
+
+  /*
+   * Stores the exact Inventory row selected for each
+   * pinned product.
+   *
+   * Example:
+   *
+   * {
+   *   P0001: "P0001-S001",
+   *   P0002: "P0002-S003"
+   * }
+   *
+   * This is frontend-only state. The actual watchlist
+   * remains product-level in the backend.
+   */
+  const [selectedFavoriteRows, setSelectedFavoriteRows] =
+    useState<Record<string, string>>(() => {
+      if (typeof window === "undefined") {
+        return {};
+      }
+
+      try {
+        const saved =
+          window.sessionStorage.getItem(
+            FAVORITE_ROWS_STORAGE_KEY
+          );
+
+        if (!saved) {
+          return {};
+        }
+
+        const parsed: unknown =
+          JSON.parse(saved);
+
+        if (
+          typeof parsed !== "object" ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
+          return {};
+        }
+
+        const result: Record<string, string> =
+          {};
+
+        for (const [productId, rowKey] of Object.entries(
+          parsed
+        )) {
+          if (typeof rowKey === "string") {
+            result[productId] = rowKey;
+          }
+        }
+
+        return result;
+      } catch {
+        return {};
+      }
+    });
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(
+        FAVORITE_ROWS_STORAGE_KEY,
+        JSON.stringify(selectedFavoriteRows)
+      );
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [selectedFavoriteRows]);
+
+  const [formOpen, setFormOpen] =
+    useState(false);
+
+  const [saving, setSaving] =
+    useState(false);
+
+  const [formError, setFormError] =
+    useState("");
+
+  const [successMessage, setSuccessMessage] =
+    useState("");
+
+  const [movementType, setMovementType] =
+    useState<
+      "DELIVERY" |
+      "RETURN" |
+      "MANUAL_CORRECTION"
+    >("DELIVERY");
+
+  const [quantityDelta, setQuantityDelta] =
+    useState("");
+
+  const [movementReason, setMovementReason] =
+    useState("");
+
+  const [originalCostPrice, setOriginalCostPrice] =
+    useState("");
 
   const [form, setForm] = useState({
     product_id: "",
@@ -97,14 +210,41 @@ export default function Inventory() {
     region: "",
   });
 
+  /*
+   * Deep link:
+   * /inventory?product=P0001
+   */
   useEffect(() => {
     setProductFilter(urlProduct);
   }, [urlProduct]);
 
+  /*
+   * Update the visually selected row for one product.
+   */
+  function handleFavoriteRowSelected(
+    productId: string,
+    rowKey: string | null
+  ) {
+    setSelectedFavoriteRows((previous) => {
+      const next = {
+        ...previous,
+      };
+
+      if (rowKey === null) {
+        delete next[productId];
+      } else {
+        next[productId] = rowKey;
+      }
+
+      return next;
+    });
+  }
+
   function changeProduct(next: string) {
     setProductFilter(next);
 
-    const params = new URLSearchParams(searchParams);
+    const params =
+      new URLSearchParams(searchParams);
 
     if (next) {
       params.set("product", next);
@@ -112,7 +252,9 @@ export default function Inventory() {
       params.delete("product");
     }
 
-    setSearchParams(params, { replace: true });
+    setSearchParams(params, {
+      replace: true,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -124,11 +266,13 @@ export default function Inventory() {
     loading,
     error,
   } = useApi(
-    () => getCurrentInventory({ category: category || undefined }),
+    () =>
+      getCurrentInventory({
+        category:
+          category || undefined,
+      }),
     [category, refreshKey]
   );
-
-  const productCosts = useApi(() => getProductCosts(), [refreshKey]);
 
   // -------------------------------------------------------------------------
   // Product catalog
@@ -138,7 +282,20 @@ export default function Inventory() {
     data: productsData,
     loading: productsLoading,
     error: productsError,
-  } = useApi(() => getProducts(), []);
+  } = useApi(
+    () => getProducts(),
+    []
+  );
+
+  const { data: productCosts } = useApi(
+    () => getProductCosts(),
+    [refreshKey]
+  );
+
+  const costByProduct = useMemo(
+    () => new Map((productCosts?.products ?? []).map((item) => [item.product_id, item.cost_price])),
+    [productCosts]
+  );
 
   const productMap = useMemo(() => {
     const map = new Map<
@@ -151,23 +308,44 @@ export default function Inventory() {
       }
     >();
 
-    for (const product of productsData?.products ?? []) {
-      map.set(product.product_id, product);
+    for (
+      const product of productsData?.products ?? []
+    ) {
+      map.set(
+        product.product_id,
+        product
+      );
     }
 
     return map;
   }, [productsData]);
 
-  function getProductName(productId: string) {
-    return productMap.get(productId)?.name ?? "Unknown product";
+  function getProductName(
+    productId: string
+  ) {
+    return (
+      productMap.get(productId)?.name ??
+      "Unknown product"
+    );
   }
 
-  function getProductSku(productId: string) {
-    return productMap.get(productId)?.sku ?? "—";
+  function getProductSku(
+    productId: string
+  ) {
+    return (
+      productMap.get(productId)?.sku ??
+      "—"
+    );
   }
 
-  function getProductCategory(productId: string, fallback: string) {
-    return productMap.get(productId)?.category ?? fallback;
+  function getProductCategory(
+    productId: string,
+    fallback: string
+  ) {
+    return (
+      productMap.get(productId)?.category ??
+      fallback
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -181,11 +359,19 @@ export default function Inventory() {
   } = useApi(
     () =>
       getStockMovements({
-        product_id: productFilter || undefined,
-        store_id: storeFilter || undefined,
-        movement_type: movementTypeFilter || undefined,
+        product_id:
+          productFilter || undefined,
+        store_id:
+          storeFilter || undefined,
+        movement_type:
+          movementTypeFilter || undefined,
       }),
-    [productFilter, storeFilter, movementTypeFilter, refreshKey]
+    [
+      productFilter,
+      storeFilter,
+      movementTypeFilter,
+      refreshKey,
+    ]
   );
 
   // -------------------------------------------------------------------------
@@ -199,7 +385,6 @@ export default function Inventory() {
   }
 
   function beginAdd() {
-    setOriginalCostPrice("");
     setForm({
       product_id: "",
       store_id: "",
@@ -208,6 +393,7 @@ export default function Inventory() {
       cost_price: "",
       region: "",
     });
+    setOriginalCostPrice("");
 
     resetMovementFields();
     setFormError("");
@@ -215,20 +401,26 @@ export default function Inventory() {
     setFormOpen(true);
   }
 
-  function beginEdit(row: NonNullable<typeof data>[number]) {
-    const savedCost = productCosts.data?.products.find((product) => product.product_id === row.product_id)?.cost_price;
-    const costPrice = savedCost == null ? "" : String(savedCost);
-    setOriginalCostPrice(costPrice);
+  function beginEdit(
+    row: NonNullable<typeof data>[number]
+  ) {
     setForm({
       product_id: row.product_id,
       store_id: row.store_id,
-      inventory_level: String(row.inventory_level),
-      units_ordered: String(row.units_ordered),
-      cost_price: costPrice,
-      region: REGIONS.includes(row.region) ? row.region : "",
+      inventory_level:
+        String(row.inventory_level),
+      units_ordered:
+        String(row.units_ordered),
+      cost_price: costByProduct.get(row.product_id) == null
+        ? ""
+        : String(costByProduct.get(row.product_id)),
+      region: REGIONS.includes(row.region)
+        ? row.region
+        : "",
     });
 
     resetMovementFields();
+    setOriginalCostPrice(costByProduct.get(row.product_id) == null ? "" : String(costByProduct.get(row.product_id)));
     setFormError("");
     setSuccessMessage("");
     setFormOpen(true);
@@ -239,8 +431,11 @@ export default function Inventory() {
   // -------------------------------------------------------------------------
 
   const existingFormRow = useMemo(() => {
-    const productId = form.product_id.trim();
-    const storeId = form.store_id.trim();
+    const productId =
+      form.product_id.trim();
+
+    const storeId =
+      form.store_id.trim();
 
     if (!productId || !storeId) {
       return undefined;
@@ -251,7 +446,11 @@ export default function Inventory() {
         row.product_id === productId &&
         row.store_id === storeId
     );
-  }, [data, form.product_id, form.store_id]);
+  }, [
+    data,
+    form.product_id,
+    form.store_id,
+  ]);
 
   // -------------------------------------------------------------------------
   // Submit inventory form
@@ -268,8 +467,11 @@ export default function Inventory() {
     let movementRecorded = false;
 
     try {
-      const productId = form.product_id.trim();
-      const storeId = form.store_id.trim();
+      const productId =
+        form.product_id.trim();
+
+      const storeId =
+        form.store_id.trim();
 
       if (!productId || !storeId) {
         throw new Error(
@@ -282,27 +484,29 @@ export default function Inventory() {
       // ---------------------------------------------------------------
 
       if (existingFormRow) {
-        const hasMovement = quantityDelta.trim() !== "";
         const costChanged = form.cost_price.trim() !== originalCostPrice;
-        const delta = Number(quantityDelta);
+        const hasMovement = quantityDelta.trim() !== "";
+        const delta =
+          Number(quantityDelta);
 
         if (!hasMovement && !costChanged) {
           throw new Error("Change the unit cost or enter a stock movement.");
         }
 
-        if (hasMovement && (!Number.isInteger(delta) || delta === 0)) {
-          throw new Error("Quantity change must be a non-zero whole number.");
+        if (hasMovement && (
+          !Number.isInteger(delta) ||
+          delta === 0
+        )) {
+          throw new Error(
+            "Quantity change must be a non-zero whole number."
+          );
         }
 
-        if (costChanged && !form.cost_price.trim()) {
-          throw new Error("Enter a unit cost. To remove a saved cost, set it to 0.");
-        }
-
-        if (
-          hasMovement &&
-          (movementType === "DELIVERY" || movementType === "RETURN") &&
+        if (hasMovement && (
+          (movementType === "DELIVERY" ||
+            movementType === "RETURN") &&
           delta <= 0
-        ) {
+        )) {
           throw new Error(
             "Delivery and Return quantities must be positive."
           );
@@ -314,50 +518,70 @@ export default function Inventory() {
           );
         }
 
+        if (costChanged && !form.cost_price.trim()) {
+          throw new Error("Enter a unit cost. To remove a saved cost, set it to 0.");
+        }
+        const parsedCost = Number(form.cost_price);
+        if (costChanged && (!Number.isFinite(parsedCost) || parsedCost < 0)) {
+          throw new Error("Unit cost must be zero or greater.");
+        }
+
         let movementMessage = "";
         if (hasMovement) {
           const result = await adjustInventory({
             product_id: productId,
             store_id: storeId,
-            movement_type: movementType,
+            movement_type:
+              movementType,
             quantity_delta: delta,
-            reason: movementReason.trim(),
+            reason:
+              movementReason.trim(),
           });
           movementRecorded = true;
-          movementMessage = `${movementType.replace("_", " ")} recorded: ${result.quantity_before} → ${result.quantity_after}.`;
+          movementMessage = `${movementType.replace("_", " ")} recorded for ${result.product_id} at ${result.store_id}: ${result.quantity_before} → ${result.quantity_after}.`;
         }
         if (costChanged) {
-          await updateProductCost(productId, Number(form.cost_price));
+          await updateProductCost(productId, parsedCost);
           setOriginalCostPrice(form.cost_price.trim());
         }
-        setSuccessMessage([
-          movementMessage,
-          costChanged ? `Unit cost saved for ${productId}.` : "",
-        ].filter(Boolean).join(" "));
+        setSuccessMessage([movementMessage, costChanged ? `Unit cost saved for ${productId}.` : ""].filter(Boolean).join(" "));
       } else {
         // -------------------------------------------------------------
         // New product/store = create starting inventory record
         // -------------------------------------------------------------
 
-        if (!productMap.has(productId)) {
+        if (
+          !productMap.has(productId)
+        ) {
           throw new Error(
             "Please select a valid product from the product catalog."
           );
         }
 
-        if (!form.inventory_level.trim()) {
-          throw new Error("Please enter the starting stock.");
+        if (
+          !form.inventory_level.trim()
+        ) {
+          throw new Error(
+            "Please enter the starting stock."
+          );
         }
 
         if (!form.region) {
-          throw new Error("Please select a region.");
+          throw new Error(
+            "Please select a region."
+          );
         }
 
-        const startingStock = Number(form.inventory_level);
-        const unitsOrdered = Number(form.units_ordered);
+        const startingStock =
+          Number(form.inventory_level);
+
+        const unitsOrdered =
+          Number(form.units_ordered);
 
         if (
-          !Number.isInteger(startingStock) ||
+          !Number.isInteger(
+            startingStock
+          ) ||
           startingStock < 0
         ) {
           throw new Error(
@@ -366,7 +590,9 @@ export default function Inventory() {
         }
 
         if (
-          !Number.isInteger(unitsOrdered) ||
+          !Number.isInteger(
+            unitsOrdered
+          ) ||
           unitsOrdered < 0
         ) {
           throw new Error(
@@ -374,32 +600,46 @@ export default function Inventory() {
           );
         }
 
-        const result = await saveInventory({
-          product_id: productId,
-          store_id: storeId,
-          inventory_level: startingStock,
-          units_ordered: unitsOrdered,
-          region: form.region,
-          cost_price: form.cost_price.trim() ? Number(form.cost_price) : undefined,
-        });
+        const result =
+          await saveInventory({
+            product_id: productId,
+            store_id: storeId,
+            inventory_level:
+              startingStock,
+            units_ordered:
+              unitsOrdered,
+            cost_price: form.cost_price.trim() ? Number(form.cost_price) : undefined,
+            region:
+              form.region,
+          });
 
         setSuccessMessage(
           `${
-            result.created ? "Stock record added" : "Stock updated"
-          } for ${result.product_id} at ${result.store_id}.`
+            result.created
+              ? "Stock record added"
+              : "Stock updated"
+          } for ${
+            result.product_id
+          } at ${
+            result.store_id
+          }.`
         );
       }
 
       setFormOpen(false);
       resetMovementFields();
-      setRefreshKey((key) => key + 1);
+      setRefreshKey(
+        (key) => key + 1
+      );
     } catch (err) {
       const errorMessage = err instanceof ApiError || err instanceof Error
         ? err.message
         : "Could not save this stock record. Please try again.";
-      setFormError(movementRecorded
-        ? `The stock movement was recorded, but the unit cost could not be saved: ${errorMessage}`
-        : errorMessage);
+      setFormError(
+        movementRecorded
+          ? `The stock movement was recorded, but the unit cost could not be saved: ${errorMessage}`
+          : errorMessage
+      );
     } finally {
       setSaving(false);
     }
@@ -409,54 +649,67 @@ export default function Inventory() {
   // Inventory filtering
   // -------------------------------------------------------------------------
 
-  const costByProduct = useMemo(
-    () => new Map((productCosts.data?.products ?? []).map((product) => [product.product_id, product.cost_price])),
-    [productCosts.data]
-  );
-  const inventoryRows = useMemo(
-    () => (data ?? []).map((row) => ({ ...row, cost_price: costByProduct.get(row.product_id) ?? null })),
-    [data, costByProduct]
-  );
-
   const rows = useMemo(() => {
-    let filtered = inventoryRows;
+    let filtered = data ?? [];
 
     if (productFilter) {
       filtered = filtered.filter(
-        (row) => row.product_id === productFilter
+        (row) =>
+          row.product_id ===
+          productFilter
       );
     }
 
     if (storeFilter) {
       filtered = filtered.filter(
-        (row) => row.store_id === storeFilter
+        (row) =>
+          row.store_id ===
+          storeFilter
       );
     }
 
-    if (statusFilter === "low") {
+    if (
+      statusFilter === "low"
+    ) {
       filtered = filtered.filter(
-        (row) => row.inventory_level < 50
+        (row) =>
+          row.inventory_level < 50
       );
     }
 
     return filtered;
-  }, [inventoryRows, productFilter, storeFilter, statusFilter]);
+  }, [
+    data,
+    productFilter,
+    storeFilter,
+    statusFilter,
+  ]);
 
   // -------------------------------------------------------------------------
   // Inventory sorting and pagination
   // -------------------------------------------------------------------------
 
-  const [search, setSearch] = useState("");
+  const [search, setSearch] =
+    useState("");
+
   const [sortKey, setSortKey] =
     useState<SortKey>("product_id");
+
   const [sortDir, setSortDir] =
     useState<SortDir>("asc");
-  const [page, setPage] = useState(1);
 
-  function toggleSort(key: SortKey) {
+  const [page, setPage] =
+    useState(1);
+
+  function toggleSort(
+    key: SortKey
+  ) {
     if (key === sortKey) {
-      setSortDir((direction) =>
-        direction === "asc" ? "desc" : "asc"
+      setSortDir(
+        (direction) =>
+          direction === "asc"
+            ? "desc"
+            : "asc"
       );
     } else {
       setSortKey(key);
@@ -467,74 +720,149 @@ export default function Inventory() {
   }
 
   const sorted = useMemo(() => {
-    const filtered = rows.filter((row) => {
-      if (!search) {
-        return true;
+    const filtered =
+      rows.filter((row) => {
+        if (!search) {
+          return true;
+        }
+
+        const q =
+          search.toLowerCase();
+
+        const product =
+          productMap.get(
+            row.product_id
+          );
+
+        return (
+          row.product_id
+            .toLowerCase()
+            .includes(q) ||
+          row.category
+            .toLowerCase()
+            .includes(q) ||
+          row.store_id
+            .toLowerCase()
+            .includes(q) ||
+          row.region
+            .toLowerCase()
+            .includes(q) ||
+          product?.name
+            .toLowerCase()
+            .includes(q) ||
+          product?.sku
+            .toLowerCase()
+            .includes(q) ||
+          product?.category
+            .toLowerCase()
+            .includes(q)
+        );
+      });
+
+    const dir =
+      sortDir === "asc"
+        ? 1
+        : -1;
+
+    return [...filtered].sort(
+      (a, b) => {
+        let av: string | number;
+        let bv: string | number;
+
+        if (
+          sortKey ===
+          "product_id"
+        ) {
+          av =
+            productMap.get(
+              a.product_id
+            )?.name ??
+            a.product_id;
+
+          bv =
+            productMap.get(
+              b.product_id
+            )?.name ??
+            b.product_id;
+        } else if (
+          sortKey ===
+          "category"
+        ) {
+          av =
+            getProductCategory(
+              a.product_id,
+              a.category
+            );
+
+          bv =
+            getProductCategory(
+              b.product_id,
+              b.category
+            );
+        } else if (sortKey === "cost_price") {
+          av = costByProduct.get(a.product_id) ?? -1;
+          bv = costByProduct.get(b.product_id) ?? -1;
+        } else {
+          av = a[sortKey];
+          bv = b[sortKey];
+        }
+
+        if (
+          typeof av === "number" &&
+          typeof bv === "number"
+        ) {
+          return (
+            (av - bv) * dir
+          );
+        }
+
+        return (
+          String(av).localeCompare(
+            String(bv)
+          ) * dir
+        );
       }
+    );
+  }, [
+    rows,
+    search,
+    sortKey,
+    sortDir,
+    productMap,
+    costByProduct,
+  ]);
 
-      const q = search.toLowerCase();
+  const pageCount =
+    Math.max(
+      1,
+      Math.ceil(
+        sorted.length /
+          PAGE_SIZE
+      )
+    );
 
-      const product = productMap.get(row.product_id);
+  const currentPage =
+    Math.min(
+      page,
+      pageCount
+    );
 
-      return (
-        row.product_id.toLowerCase().includes(q) ||
-        row.category.toLowerCase().includes(q) ||
-        row.store_id.toLowerCase().includes(q) ||
-        row.region.toLowerCase().includes(q) ||
-        product?.name.toLowerCase().includes(q) ||
-        product?.sku.toLowerCase().includes(q) ||
-        product?.category.toLowerCase().includes(q)
-      );
-    });
-
-    const dir = sortDir === "asc" ? 1 : -1;
-
-    return [...filtered].sort((a, b) => {
-      let av: string | number;
-      let bv: string | number;
-
-      if (sortKey === "product_id") {
-        av = productMap.get(a.product_id)?.name ?? a.product_id;
-        bv = productMap.get(b.product_id)?.name ?? b.product_id;
-      } else if (sortKey === "category") {
-        av = getProductCategory(a.product_id, a.category);
-        bv = getProductCategory(b.product_id, b.category);
-      } else {
-        const valueA = a[sortKey];
-        const valueB = b[sortKey];
-        av = typeof valueA === "number" ? valueA : String(valueA ?? "");
-        bv = typeof valueB === "number" ? valueB : String(valueB ?? "");
-      }
-
-      if (
-        typeof av === "number" &&
-        typeof bv === "number"
-      ) {
-        return (av - bv) * dir;
-      }
-
-      return String(av).localeCompare(String(bv)) * dir;
-    });
-  }, [rows, search, sortKey, sortDir, productMap]);
-
-  const pageCount = Math.max(
-    1,
-    Math.ceil(sorted.length / PAGE_SIZE)
-  );
-
-  const currentPage = Math.min(page, pageCount);
-
-  const paged = sorted.slice(
-    (currentPage - 1) * PAGE_SIZE,
-    currentPage * PAGE_SIZE
-  );
-
+  const paged =
+    sorted.slice(
+      (currentPage - 1) *
+        PAGE_SIZE,
+      currentPage *
+        PAGE_SIZE
+    );
 
   const storeIds = useMemo(
     () =>
       Array.from(
         new Set(
-          (data ?? []).map((row) => row.store_id)
+          (data ?? []).map(
+            (row) =>
+              row.store_id
+          )
         )
       ).sort(),
     [data]
@@ -544,41 +872,60 @@ export default function Inventory() {
   // Stock movement helpers
   // -------------------------------------------------------------------------
 
-  function movementLabel(type: string) {
+  function movementLabel(
+    type: string
+  ) {
     switch (type) {
       case "SALE":
         return "Sale";
+
       case "DELIVERY":
         return "Delivery";
+
       case "RETURN":
         return "Return";
+
       case "MANUAL_CORRECTION":
         return "Manual Correction";
+
       default:
         return type;
     }
   }
 
-  function formatMovementDate(value: string) {
-    const date = new Date(value);
+  function formatMovementDate(
+    value: string
+  ) {
+    const date =
+      new Date(value);
 
-    if (Number.isNaN(date.getTime())) {
+    if (
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
       return value;
     }
 
     return date.toLocaleString();
   }
 
-  function movementBadgeClass(type: string) {
+  function movementBadgeClass(
+    type: string
+  ) {
     switch (type) {
       case "SALE":
         return "bg-red-100 text-red-800 ring-red-600/20";
+
       case "DELIVERY":
         return "bg-blue-100 text-blue-800 ring-blue-600/20";
+
       case "RETURN":
         return "bg-green-100 text-green-800 ring-green-600/20";
+
       case "MANUAL_CORRECTION":
         return "bg-amber-100 text-amber-800 ring-amber-600/20";
+
       default:
         return "bg-gray-100 text-gray-800 ring-gray-600/20";
     }
@@ -601,13 +948,11 @@ export default function Inventory() {
         }
       />
 
-      {formError && !formOpen && <p role="alert" className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{formError}</p>}
-
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-100 bg-brand-50 px-4 py-3">
         <p className="text-sm text-gray-700">
-          Add stock for a catalog product, or record a
-          delivery, return, or manual correction for an
-          existing product.
+          Add stock for a catalog product, or
+          record a delivery, return, or manual
+          correction for an existing product.
         </p>
 
         <button
@@ -635,7 +980,9 @@ export default function Inventory() {
       {formOpen && (
         <Card>
           <form
-            onSubmit={submitInventory}
+            onSubmit={
+              submitInventory
+            }
             className="space-y-4"
           >
             <div>
@@ -653,53 +1000,91 @@ export default function Inventory() {
             </div>
 
             {/* Product and store */}
-
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="space-y-1 text-sm font-medium text-gray-700">
                 Product
 
                 <select
                   required
-                  value={form.product_id}
-                  disabled={productsLoading}
-                  onChange={(event) =>
+                  value={
+                    form.product_id
+                  }
+                  disabled={
+                    productsLoading
+                  }
+                  onChange={(
+                    event
+                  ) =>
                     setForm({
                       ...form,
-                      product_id: event.target.value,
+                      product_id:
+                        event
+                          .target
+                          .value,
                     })
                   }
                   className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal disabled:bg-gray-100"
                 >
-                  <option value="" disabled>
+                  <option
+                    value=""
+                    disabled
+                  >
                     {productsLoading
                       ? "Loading products..."
                       : "Select a product"}
                   </option>
 
-                  {(productsData?.products ?? []).map(
-                    (product) => (
+                  {(
+                    productsData?.products ??
+                    []
+                  ).map(
+                    (
+                      product
+                    ) => (
                       <option
-                        key={product.product_id}
-                        value={product.product_id}
+                        key={
+                          product.product_id
+                        }
+                        value={
+                          product.product_id
+                        }
                       >
-                        {product.product_id} — {product.name} (
-                        {product.sku})
+                        {
+                          product.product_id
+                        }{" "}
+                        —{" "}
+                        {
+                          product.name
+                        }{" "}
+                        (
+                        {
+                          product.sku
+                        }
+                        )
                       </option>
                     )
                   )}
                 </select>
 
                 {form.product_id &&
-                  productMap.has(form.product_id) && (
+                  productMap.has(
+                    form.product_id
+                  ) && (
                     <span className="block text-xs font-normal text-gray-500">
                       Category:{" "}
-                      {productMap.get(form.product_id)?.category}
+                      {
+                        productMap.get(
+                          form.product_id
+                        )
+                          ?.category
+                      }
                     </span>
                   )}
 
                 {productsError && (
                   <span className="block text-xs font-normal text-red-600">
-                    Could not load the product catalog.
+                    Could not load the product
+                    catalog.
                   </span>
                 )}
               </label>
@@ -710,11 +1095,18 @@ export default function Inventory() {
                 <input
                   required
                   maxLength={20}
-                  value={form.store_id}
-                  onChange={(event) =>
+                  value={
+                    form.store_id
+                  }
+                  onChange={(
+                    event
+                  ) =>
                     setForm({
                       ...form,
-                      store_id: event.target.value,
+                      store_id:
+                        event
+                          .target
+                          .value,
                     })
                   }
                   placeholder="e.g. S0001"
@@ -729,7 +1121,7 @@ export default function Inventory() {
 
             {!existingFormRow && (
               <>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <label className="space-y-1 text-sm font-medium text-gray-700">
                     Starting Stock
 
@@ -738,12 +1130,18 @@ export default function Inventory() {
                       type="number"
                       min="0"
                       step="1"
-                      value={form.inventory_level}
-                      onChange={(event) =>
+                      value={
+                        form.inventory_level
+                      }
+                      onChange={(
+                        event
+                      ) =>
                         setForm({
                           ...form,
                           inventory_level:
-                            event.target.value,
+                            event
+                              .target
+                              .value,
                         })
                       }
                       placeholder="e.g. 100"
@@ -759,12 +1157,18 @@ export default function Inventory() {
                       type="number"
                       min="0"
                       step="1"
-                      value={form.units_ordered}
-                      onChange={(event) =>
+                      value={
+                        form.units_ordered
+                      }
+                      onChange={(
+                        event
+                      ) =>
                         setForm({
                           ...form,
                           units_ordered:
-                            event.target.value,
+                            event
+                              .target
+                              .value,
                         })
                       }
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
@@ -778,7 +1182,7 @@ export default function Inventory() {
                       min="0"
                       step="0.01"
                       value={form.cost_price}
-                      onChange={(e) => setForm({ ...form, cost_price: e.target.value })}
+                      onChange={(event) => setForm({ ...form, cost_price: event.target.value })}
                       placeholder="e.g. 4.50"
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
                     />
@@ -789,40 +1193,69 @@ export default function Inventory() {
 
                     <select
                       required
-                      value={form.region}
-                      onChange={(event) =>
+                      value={
+                        form.region
+                      }
+                      onChange={(
+                        event
+                      ) =>
                         setForm({
                           ...form,
-                          region: event.target.value,
+                          region:
+                            event
+                              .target
+                              .value,
                         })
                       }
                       className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal"
                     >
-                      <option value="" disabled>
+                      <option
+                        value=""
+                        disabled
+                      >
                         Select a region
                       </option>
 
-                      {REGIONS.map((item) => (
-                        <option
-                          key={item}
-                          value={item}
-                        >
-                          {item}
-                        </option>
-                      ))}
+                      {REGIONS.map(
+                        (
+                          item
+                        ) => (
+                          <option
+                            key={item}
+                            value={item}
+                          >
+                            {item}
+                          </option>
+                        )
+                      )}
                     </select>
                   </label>
                 </div>
 
                 {form.product_id &&
-                  productMap.has(form.product_id) && (
+                  productMap.has(
+                    form.product_id
+                  ) && (
                     <div className="rounded-lg border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-gray-700">
-                      <strong>Product:</strong>{" "}
-                      {form.product_id} —{" "}
-                      {getProductName(form.product_id)}{" "}
-                      ({getProductSku(form.product_id)})
+                      <strong>
+                        Product:
+                      </strong>{" "}
+                      {
+                        form.product_id
+                      }{" "}
+                      —{" "}
+                      {getProductName(
+                        form.product_id
+                      )}{" "}
+                      (
+                      {getProductSku(
+                        form.product_id
+                      )}
+                      )
                       <br />
-                      <strong>Standard category:</strong>{" "}
+                      <strong>
+                        Standard category:
+                      </strong>{" "}
                       {getProductCategory(
                         form.product_id,
                         "—"
@@ -831,7 +1264,9 @@ export default function Inventory() {
                   )}
 
                 <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-600">
-                  <strong>New product stock:</strong>{" "}
+                  <strong>
+                    New product stock:
+                  </strong>{" "}
                   Starting stock is the initial quantity
                   currently available. The product category
                   comes automatically from the product catalog.
@@ -848,39 +1283,39 @@ export default function Inventory() {
             {existingFormRow && (
               <>
                 <div className="rounded-lg border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-gray-700">
-                  <strong>Product:</strong>{" "}
-                  {existingFormRow.product_id} —{" "}
+                  <strong>
+                    Product:
+                  </strong>{" "}
+                  {
+                    existingFormRow.product_id
+                  }{" "}
+                  —{" "}
                   {getProductName(
                     existingFormRow.product_id
                   )}{" "}
-                  ({getProductSku(existingFormRow.product_id)})
+                  (
+                  {getProductSku(
+                    existingFormRow.product_id
+                  )}
+                  )
                   <br />
-                  <strong>Category:</strong>{" "}
+
+                  <strong>
+                    Category:
+                  </strong>{" "}
                   {getProductCategory(
                     existingFormRow.product_id,
                     existingFormRow.category
                   )}
                   <br />
-                  <strong>Current stock:</strong>{" "}
-                  {existingFormRow.inventory_level} units
-                </div>
 
-                <div className="max-w-sm space-y-1">
-                  <label className="space-y-1 text-sm font-medium text-gray-700">
-                    Unit Cost
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.cost_price}
-                      onChange={(event) => setForm({ ...form, cost_price: event.target.value })}
-                      placeholder="Enter purchase cost per unit"
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                    />
-                  </label>
-                  <p className="text-xs text-gray-500">
-                    Applies to this product across stores. Recorded sales keep their saved cost history.
-                  </p>
+                  <strong>
+                    Current stock:
+                  </strong>{" "}
+                  {
+                    existingFormRow.inventory_level
+                  }{" "}
+                  units
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -889,10 +1324,16 @@ export default function Inventory() {
 
                     <select
                       required
-                      value={movementType}
-                      onChange={(event) =>
+                      value={
+                        movementType
+                      }
+                      onChange={(
+                        event
+                      ) =>
                         setMovementType(
-                          event.target.value as
+                          event
+                            .target
+                            .value as
                             | "DELIVERY"
                             | "RETURN"
                             | "MANUAL_CORRECTION"
@@ -920,10 +1361,16 @@ export default function Inventory() {
                     <input
                       type="number"
                       step="1"
-                      value={quantityDelta}
-                      onChange={(event) =>
+                      value={
+                        quantityDelta
+                      }
+                      onChange={(
+                        event
+                      ) =>
                         setQuantityDelta(
-                          event.target.value
+                          event
+                            .target
+                            .value
                         )
                       }
                       placeholder={
@@ -947,31 +1394,53 @@ export default function Inventory() {
                     Reason
 
                     <input
-                      required
                       type="text"
                       maxLength={500}
-                      value={movementReason}
-                      onChange={(event) =>
+                      value={
+                        movementReason
+                      }
+                      onChange={(
+                        event
+                      ) =>
                         setMovementReason(
-                          event.target.value
+                          event
+                            .target
+                            .value
                         )
                       }
                       placeholder={
-                        movementType === "DELIVERY"
+                        movementType ===
+                        "DELIVERY"
                           ? "e.g. Supplier delivery"
-                          : movementType === "RETURN"
+                          : movementType ===
+                            "RETURN"
                           ? "e.g. Customer returned items"
                           : "e.g. Damaged stock correction"
                       }
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
                     />
                   </label>
+
+                  <label className="space-y-1 text-sm font-medium text-gray-700">
+                    Unit Cost
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.cost_price}
+                      onChange={(event) => setForm({ ...form, cost_price: event.target.value })}
+                      placeholder="Enter purchase cost per unit"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                    />
+                  </label>
                 </div>
 
                 <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-600">
-                  <strong>History:</strong> This change will
-                  be saved with the movement type, reason,
-                  quantity before, quantity after, and
+                  <strong>
+                    History:
+                  </strong>{" "}
+                  This change will be saved with the movement type,
+                  reason, quantity before, quantity after, and
                   timestamp.
                 </div>
               </>
@@ -995,11 +1464,7 @@ export default function Inventory() {
                 {saving
                   ? "Saving…"
                   : existingFormRow
-                  ? quantityDelta.trim()
-                    ? form.cost_price.trim() !== originalCostPrice
-                      ? "Save stock and cost"
-                      : "Record movement"
-                    : "Save unit cost"
+                  ? "Record movement"
                   : "Add product"}
               </button>
 
@@ -1029,7 +1494,9 @@ export default function Inventory() {
             type="search"
             value={search}
             onChange={(event) => {
-              setSearch(event.target.value);
+              setSearch(
+                event.target.value
+              );
               setPage(1);
             }}
             placeholder="Search product, SKU, category, store, region..."
@@ -1041,7 +1508,9 @@ export default function Inventory() {
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
             value={category}
             onChange={(event) => {
-              setCategory(event.target.value);
+              setCategory(
+                event.target.value
+              );
               setPage(1);
             }}
             aria-label="Filter by category"
@@ -1050,18 +1519,25 @@ export default function Inventory() {
               All categories
             </option>
 
-            {CATEGORIES.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
+            {CATEGORIES.map(
+              (item) => (
+                <option
+                  key={item}
+                  value={item}
+                >
+                  {item}
+                </option>
+              )
+            )}
           </select>
 
           <select
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
             value={productFilter}
             onChange={(event) =>
-              changeProduct(event.target.value)
+              changeProduct(
+                event.target.value
+              )
             }
             aria-label="Filter by product"
           >
@@ -1069,13 +1545,26 @@ export default function Inventory() {
               All products
             </option>
 
-            {(productsData?.products ?? []).map(
+            {(
+              productsData?.products ??
+              []
+            ).map(
               (product) => (
                 <option
-                  key={product.product_id}
-                  value={product.product_id}
+                  key={
+                    product.product_id
+                  }
+                  value={
+                    product.product_id
+                  }
                 >
-                  {product.product_id} — {product.name}
+                  {
+                    product.product_id
+                  }{" "}
+                  —{" "}
+                  {
+                    product.name
+                  }
                 </option>
               )
             )}
@@ -1085,18 +1574,27 @@ export default function Inventory() {
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
             value={storeFilter}
             onChange={(event) => {
-              setStoreFilter(event.target.value);
+              setStoreFilter(
+                event.target.value
+              );
               setPage(1);
             }}
             aria-label="Filter by store"
           >
-            <option value="">All stores</option>
+            <option value="">
+              All stores
+            </option>
 
-            {storeIds.map((storeId) => (
-              <option key={storeId} value={storeId}>
-                {storeId}
-              </option>
-            ))}
+            {storeIds.map(
+              (storeId) => (
+                <option
+                  key={storeId}
+                  value={storeId}
+                >
+                  {storeId}
+                </option>
+              )
+            )}
           </select>
 
           <select
@@ -1104,7 +1602,9 @@ export default function Inventory() {
             value={statusFilter}
             onChange={(event) => {
               setStatusFilter(
-                event.target.value as "all" | "low"
+                event.target.value as
+                  | "all"
+                  | "low"
               );
               setPage(1);
             }}
@@ -1124,7 +1624,9 @@ export default function Inventory() {
           <LoadingState label="Loading inventory..." />
         )}
 
-        {error && <ErrorState message={error} />}
+        {error && (
+          <ErrorState message={error} />
+        )}
 
         {!loading && !error && (
           <>
@@ -1132,46 +1634,66 @@ export default function Inventory() {
               <table className="min-w-full divide-y divide-gray-200 text-sm">
                 <thead className="bg-gray-50">
                   <tr>
-                    {COLUMNS.map((column) => (
-                      <th
-                        key={column.key}
-                        className="whitespace-nowrap px-4 py-2.5 text-left"
-                      >
-                        <button
-                          type="button"
-                          onClick={() =>
-                            toggleSort(column.key)
-                          }
-                          className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-800"
-                          aria-label={`Sort by ${column.label}`}
-                        >
-                          {column.label}
-
-                          <span
-                            aria-hidden="true"
-                            className={
-                              sortKey === column.key
-                                ? "text-brand-600"
-                                : "text-gray-300"
-                            }
-                          >
-                            {sortKey === column.key
-                              ? sortDir === "asc"
-                                ? "▲"
-                                : "▼"
-                              : "↕"}
-                          </span>
-                        </button>
-                      </th>
-                    ))}
-
-                    {["Status", "Actions"].map(
-                      (heading) => (
+                    {COLUMNS.map(
+                      (column) => (
                         <th
-                          key={heading}
+                          key={
+                            column.key
+                          }
+                          className="whitespace-nowrap px-4 py-2.5 text-left"
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleSort(
+                                column.key
+                              )
+                            }
+                            className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-800"
+                            aria-label={`Sort by ${column.label}`}
+                          >
+                            {
+                              column.label
+                            }
+
+                            <span
+                              aria-hidden="true"
+                              className={
+                                sortKey ===
+                                column.key
+                                  ? "text-brand-600"
+                                  : "text-gray-300"
+                              }
+                            >
+                              {sortKey ===
+                              column.key
+                                ? sortDir ===
+                                  "asc"
+                                  ? "▲"
+                                  : "▼"
+                                : "↕"}
+                            </span>
+                          </button>
+                        </th>
+                      )
+                    )}
+
+                    {[
+                      "Status",
+                      "Actions",
+                    ].map(
+                      (
+                        heading
+                      ) => (
+                        <th
+                          key={
+                            heading
+                          }
                           className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500"
                         >
-                          {heading}
+                          {
+                            heading
+                          }
                         </th>
                       )
                     )}
@@ -1199,6 +1721,7 @@ export default function Inventory() {
 
                           <div className="text-xs font-normal text-gray-500">
                             {row.product_id}
+
                             {product?.sku
                               ? ` · ${product.sku}`
                               : ""}
@@ -1222,7 +1745,9 @@ export default function Inventory() {
                         </td>
 
                         <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-600">
-                          {row.cost_price == null ? "—" : `$${row.cost_price.toFixed(2)}`}
+                          {costByProduct.get(row.product_id) == null
+                            ? "—"
+                            : `$${costByProduct.get(row.product_id)!.toFixed(2)}`}
                         </td>
 
                         <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-600">
@@ -1256,6 +1781,18 @@ export default function Inventory() {
 
                           <PinButton
                             productId={row.product_id}
+                            rowKey={`${row.product_id}-${row.store_id}`}
+                            selectedRowKey={
+                              selectedFavoriteRows[
+                                row.product_id
+                              ] ?? null
+                            }
+                            onRowSelected={(rowKey) =>
+                              handleFavoriteRowSelected(
+                                row.product_id,
+                                rowKey
+                              )
+                            }
                           />
                         </td>
                       </tr>
@@ -1265,7 +1802,8 @@ export default function Inventory() {
               </table>
             </div>
 
-            {sorted.length === 0 && (
+            {sorted.length ===
+              0 && (
               <div className="mt-3">
                 <EmptyState
                   title="No matching rows."
@@ -1274,50 +1812,84 @@ export default function Inventory() {
               </div>
             )}
 
-            {sorted.length > PAGE_SIZE && (
+            {sorted.length >
+              PAGE_SIZE && (
               <nav
                 className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"
                 aria-label="Inventory pages"
               >
                 <span className="text-gray-500">
                   Showing{" "}
-                  {(currentPage - 1) * PAGE_SIZE + 1}–
+                  {(currentPage -
+                    1) *
+                    PAGE_SIZE +
+                    1}
+                  –
                   {Math.min(
-                    currentPage * PAGE_SIZE,
+                    currentPage *
+                      PAGE_SIZE,
                     sorted.length
                   )}{" "}
-                  of {sorted.length} rows
+                  of{" "}
+                  {
+                    sorted.length
+                  }{" "}
+                  rows
                 </span>
 
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() =>
-                      setPage((current) =>
-                        Math.max(1, current - 1)
+                      setPage(
+                        (
+                          current
+                        ) =>
+                          Math.max(
+                            1,
+                            current -
+                              1
+                          )
                       )
                     }
-                    disabled={currentPage === 1}
+                    disabled={
+                      currentPage ===
+                      1
+                    }
                     className="rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     ← Previous
                   </button>
 
                   <span className="tabular-nums text-gray-600">
-                    Page {currentPage} of {pageCount}
+                    Page{" "}
+                    {
+                      currentPage
+                    }{" "}
+                    of{" "}
+                    {
+                      pageCount
+                    }
                   </span>
 
                   <button
                     type="button"
                     onClick={() =>
-                      setPage((current) =>
-                        Math.min(
-                          pageCount,
-                          current + 1
-                        )
+                      setPage(
+                        (
+                          current
+                        ) =>
+                          Math.min(
+                            pageCount,
+                            current +
+                              1
+                          )
                       )
                     }
-                    disabled={currentPage === pageCount}
+                    disabled={
+                      currentPage ===
+                      pageCount
+                    }
                     className="rounded-lg border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Next →
@@ -1350,7 +1922,9 @@ export default function Inventory() {
             </div>
 
             <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600">
-              {movements?.length ?? 0} movements
+              {movements?.length ??
+                0}{" "}
+              movements
             </span>
           </div>
         </div>
@@ -1358,9 +1932,13 @@ export default function Inventory() {
         <div className="mb-4 flex flex-wrap gap-2">
           <select
             className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
-            value={movementTypeFilter}
+            value={
+              movementTypeFilter
+            }
             onChange={(event) =>
-              setMovementTypeFilter(event.target.value)
+              setMovementTypeFilter(
+                event.target.value
+              )
             }
             aria-label="Filter by movement type"
           >
@@ -1368,11 +1946,20 @@ export default function Inventory() {
               All movement types
             </option>
 
-            {MOVEMENT_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {movementLabel(type)}
-              </option>
-            ))}
+            {MOVEMENT_TYPES.map(
+              (type) => (
+                <option
+                  key={type}
+                  value={type}
+                >
+                  {
+                    movementLabel(
+                      type
+                    )
+                  }
+                </option>
+              )
+            )}
           </select>
 
           <span className="flex items-center rounded-lg bg-gray-50 px-3 py-1.5 text-xs text-gray-500">
@@ -1385,7 +1972,11 @@ export default function Inventory() {
           </span>
 
           <span className="flex items-center rounded-lg bg-gray-50 px-3 py-1.5 text-xs text-gray-500">
-            Store: {storeFilter || "All"}
+            Store:{" "}
+            {
+              storeFilter ||
+              "All"
+            }
           </span>
         </div>
 
@@ -1394,141 +1985,160 @@ export default function Inventory() {
         )}
 
         {movementsError && (
-          <ErrorState message={movementsError} />
+          <ErrorState
+            message={
+              movementsError
+            }
+          />
         )}
 
-        {!movementsLoading && !movementsError && (
-          <>
-            {!movements ||
-            movements.length === 0 ? (
-              <EmptyState
-                title="No stock movements found."
-                hint="Sales, deliveries, returns, and stock corrections will appear here when they are recorded."
-              />
-            ) : (
-              <div className="overflow-x-auto rounded-lg border border-gray-200">
-                <table className="min-w-full divide-y divide-gray-200 text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                        Date / Time
-                      </th>
+        {!movementsLoading &&
+          !movementsError && (
+            <>
+              {!movements ||
+              movements.length ===
+                0 ? (
+                <EmptyState
+                  title="No stock movements found."
+                  hint="Sales, deliveries, returns, and stock corrections will appear here when they are recorded."
+                />
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-gray-200">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Date / Time
+                        </th>
 
-                      <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                        Type
-                      </th>
+                        <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Type
+                        </th>
 
-                      <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                        Product
-                      </th>
+                        <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Product
+                        </th>
 
-                      <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                        Store
-                      </th>
+                        <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Store
+                        </th>
 
-                      <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                        Change
-                      </th>
+                        <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Change
+                        </th>
 
-                      <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                        Before → After
-                      </th>
+                        <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Before → After
+                        </th>
 
-                      <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                        Reason
-                      </th>
-                    </tr>
-                  </thead>
+                        <th className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Reason
+                        </th>
+                      </tr>
+                    </thead>
 
-                  <tbody className="divide-y divide-gray-100">
-                    {movements.map((movement) => {
-                      const product =
-                        productMap.get(
-                          movement.product_id
-                        );
+                    <tbody className="divide-y divide-gray-100">
+                      {movements.map(
+                        (
+                          movement
+                        ) => {
+                          const product =
+                            productMap.get(
+                              movement.product_id
+                            );
 
-                      return (
-                        <tr
-                          key={movement.id}
-                          className="transition-colors hover:bg-brand-50/50"
-                        >
-                          <td className="whitespace-nowrap px-4 py-3 text-gray-600">
-                            {formatMovementDate(
-                              movement.occurred_at
-                            )}
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-3">
-                            <span
-                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${movementBadgeClass(
-                                movement.movement_type
-                              )}`}
-                            >
-                              {movementLabel(
-                                movement.movement_type
-                              )}
-                            </span>
-                          </td>
-
-                          <td className="px-4 py-3 font-medium text-gray-900">
-                            <div>
-                              {product?.name ??
-                                movement.product_id}
-                            </div>
-
-                            <div className="text-xs font-normal text-gray-500">
-                              {movement.product_id}
-
-                              {product?.sku
-                                ? ` · ${product.sku}`
-                                : ""}
-                            </div>
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-3 text-gray-600">
-                            {movement.store_id}
-                          </td>
-
-                          <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums">
-                            <span
-                              className={
-                                movement.quantity_delta >
-                                0
-                                  ? "text-green-700"
-                                  : "text-red-700"
+                          return (
+                            <tr
+                              key={
+                                movement.id
                               }
+                              className="transition-colors hover:bg-brand-50/50"
                             >
-                              {movement.quantity_delta > 0
-                                ? "+"
-                                : ""}
-                              {
-                                movement.quantity_delta
-                              }
-                            </span>
-                          </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-gray-600">
+                                {formatMovementDate(
+                                  movement.occurred_at
+                                )}
+                              </td>
 
-                          <td className="whitespace-nowrap px-4 py-3 tabular-nums text-gray-900">
-                            {
-                              movement.quantity_before
-                            }{" "}
-                            →{" "}
-                            {
-                              movement.quantity_after
-                            }
-                          </td>
+                              <td className="whitespace-nowrap px-4 py-3">
+                                <span
+                                  className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${movementBadgeClass(
+                                    movement.movement_type
+                                  )}`}
+                                >
+                                  {movementLabel(
+                                    movement.movement_type
+                                  )}
+                                </span>
+                              </td>
 
-                          <td className="min-w-48 px-4 py-3 text-gray-600">
-                            {movement.reason}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </>
-        )}
+                              <td className="px-4 py-3 font-medium text-gray-900">
+                                <div>
+                                  {product?.name ??
+                                    movement.product_id}
+                                </div>
+
+                                <div className="text-xs font-normal text-gray-500">
+                                  {
+                                    movement.product_id
+                                  }
+
+                                  {product?.sku
+                                    ? ` · ${product.sku}`
+                                    : ""}
+                                </div>
+                              </td>
+
+                              <td className="whitespace-nowrap px-4 py-3 text-gray-600">
+                                {
+                                  movement.store_id
+                                }
+                              </td>
+
+                              <td className="whitespace-nowrap px-4 py-3 font-semibold tabular-nums">
+                                <span
+                                  className={
+                                    movement.quantity_delta >
+                                    0
+                                      ? "text-green-700"
+                                      : "text-red-700"
+                                  }
+                                >
+                                  {movement.quantity_delta >
+                                  0
+                                    ? "+"
+                                    : ""}
+                                  {
+                                    movement.quantity_delta
+                                  }
+                                </span>
+                              </td>
+
+                              <td className="whitespace-nowrap px-4 py-3 tabular-nums text-gray-900">
+                                {
+                                  movement.quantity_before
+                                }{" "}
+                                →{" "}
+                                {
+                                  movement.quantity_after
+                                }
+                              </td>
+
+                              <td className="min-w-48 px-4 py-3 text-gray-600">
+                                {
+                                  movement.reason
+                                }
+                              </td>
+                            </tr>
+                          );
+                        }
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
       </Card>
     </div>
   );

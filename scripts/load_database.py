@@ -143,6 +143,7 @@ def load_facts(df: pd.DataFrame) -> None:
                 seasonality=row["Seasonality"],
                 demand_forecast_reference=float(row["Demand Forecast"]),
                 possible_stock_constrained=bool(row["possible_stock_constrained"]),
+                source="Sample Data",
             )
             for _, row in df.iterrows()
         ]

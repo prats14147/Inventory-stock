@@ -41,6 +41,9 @@ class DailySales(Base):
     # a confirmed stockout. See docs/limitations.md.
     possible_stock_constrained: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Data provenance: "Sample Data", "Real · Manual", or "Real · CSV Import"
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="Sample Data", server_default="Sample Data", index=True)
+
     store = relationship("Store", back_populates="sales_records")
     product = relationship("Product", back_populates="sales_records")
 

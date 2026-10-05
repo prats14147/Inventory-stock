@@ -13,4 +13,9 @@ export interface ForecastResponse {
   forecast_total_units: number;
   per_store: StoreForecast[];
   model_test_mae: number;
+  data_source?: string;
+  is_synthetic_model?: boolean;
+  baseline_improvement_pct?: number;
+  warning?: string;
 }
+
