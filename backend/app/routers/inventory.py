@@ -30,13 +30,24 @@ router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
 
 @router.post("", response_model=InventoryUpsertResponse)
-def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_db)):
-    """Add a product/store stock row or update its quantity at the current data date."""
+def upsert_inventory(
+    payload: InventoryUpsertRequest,
+    db: Session = Depends(get_db),
+):
+    """Add/update a product/store stock row for the current inventory date.
+
+    Products must already exist in the product catalog. Stores can still be
+    created automatically. The inventory category comes from the product
+    catalog so it stays consistent with the canonical product record.
+    """
     as_of = inventory_repository.get_latest_date(db) or date.today()
 
     product = db.get(Product, payload.product_id)
     if product is None:
-        db.add(Product(product_id=payload.product_id))
+        raise HTTPException(
+            status_code=404,
+            detail=f"Product {payload.product_id} not found in the product catalog.",
+        )
 
     store = db.get(Store, payload.store_id)
     if store is None:
@@ -61,11 +72,10 @@ def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_
             store_id=payload.store_id,
             inventory_level=payload.inventory_level,
             units_ordered=payload.units_ordered,
-            category=payload.category,
+            category=product.category,
             region=payload.region,
         )
         db.add(row)
-
     else:
         quantity_before = row.inventory_level
         quantity_after = payload.inventory_level
@@ -74,8 +84,8 @@ def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_
         row.inventory_level = quantity_after
         row.units_ordered = payload.units_ordered
 
-        if payload.category is not None:
-            row.category = payload.category
+        # Category is canonical in the product catalog.
+        row.category = product.category
 
         if payload.region is not None:
             row.region = payload.region
@@ -119,7 +129,6 @@ def adjust_inventory(
     DELIVERY and RETURN increase stock.
     MANUAL_CORRECTION can increase or decrease stock.
     """
-
     allowed_types = {
         DELIVERY,
         RETURN,
@@ -236,7 +245,10 @@ def low_stock(
 
 
 @router.get("/{product_id}", response_model=ProductInventoryResponse)
-def get_inventory(product_id: str, db: Session = Depends(get_db)):
+def get_inventory(
+    product_id: str,
+    db: Session = Depends(get_db),
+):
     return inventory_service.get_product_inventory(
         db,
         product_id,

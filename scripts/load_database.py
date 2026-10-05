@@ -42,26 +42,72 @@ def load_dataframe() -> pd.DataFrame:
 
 def load_dimensions(df: pd.DataFrame) -> None:
     """
-    products/stores are identity-only tables: Category and Region are NOT
-    stable per-product / per-store attributes in this dataset (verified in
-    Phase 3 -- every product appears under all 5 categories, every store
-    under all 4 regions). They're loaded onto DailySales instead.
+    Load the product catalog and store identities.
+
+    The original dataset does not provide a stable category for each
+    Product ID, so the product name, SKU, and standard category below
+    are application-level catalog metadata.
     """
+
+    product_catalog = {
+        "P0001": {"name": "Wireless Headphones", "sku": "WH-001", "category": "Electronics"},
+        "P0002": {"name": "Cotton T-Shirt", "sku": "TS-002", "category": "Clothing"},
+        "P0003": {"name": "Wooden Chair", "sku": "CH-003", "category": "Furniture"},
+        "P0004": {"name": "Smartphone", "sku": "SP-004", "category": "Electronics"},
+        "P0005": {"name": "Running Shoes", "sku": "RS-005", "category": "Clothing"},
+        "P0006": {"name": "LED Desk Lamp", "sku": "DL-006", "category": "Electronics"},
+        "P0007": {"name": "Kitchen Blender", "sku": "KB-007", "category": "Electronics"},
+        "P0008": {"name": "Teddy Bear", "sku": "TB-008", "category": "Toys"},
+        "P0009": {"name": "Office Desk", "sku": "OD-009", "category": "Furniture"},
+        "P0010": {"name": "Organic Rice", "sku": "OR-010", "category": "Groceries"},
+        "P0011": {"name": "Bluetooth Speaker", "sku": "BS-011", "category": "Electronics"},
+        "P0012": {"name": "Denim Jeans", "sku": "DJ-012", "category": "Clothing"},
+        "P0013": {"name": "Bookshelf", "sku": "BS-013", "category": "Furniture"},
+        "P0014": {"name": "Board Game", "sku": "BG-014", "category": "Toys"},
+        "P0015": {"name": "Coffee Beans", "sku": "CB-015", "category": "Groceries"},
+        "P0016": {"name": "Winter Jacket", "sku": "WJ-016", "category": "Clothing"},
+        "P0017": {"name": "Dining Table", "sku": "DT-017", "category": "Furniture"},
+        "P0018": {"name": "Action Figure", "sku": "AF-018", "category": "Toys"},
+        "P0019": {"name": "Fresh Juice", "sku": "FJ-019", "category": "Groceries"},
+        "P0020": {"name": "Wireless Mouse", "sku": "WM-020", "category": "Electronics"},
+    }
+
     session = SessionLocal()
+
     try:
         product_ids = df["Product ID"].drop_duplicates()
         store_ids = df["Store ID"].drop_duplicates()
 
         for pid in product_ids:
-            session.merge(Product(product_id=pid))
+            details = product_catalog.get(pid)
+
+            if details is None:
+                raise ValueError(
+                    f"No product catalog details configured for {pid}"
+                )
+
+            session.merge(
+                Product(
+                    product_id=pid,
+                    name=details["name"],
+                    sku=details["sku"],
+                    category=details["category"],
+                )
+            )
+
         for sid in store_ids:
             session.merge(Store(store_id=sid))
 
         session.commit()
-        log.info("Loaded %d products, %d stores.", len(product_ids), len(store_ids))
+
+        log.info(
+            "Loaded %d products, %d stores.",
+            len(product_ids),
+            len(store_ids),
+        )
+
     finally:
         session.close()
-
 
 def load_facts(df: pd.DataFrame) -> None:
     session = SessionLocal()

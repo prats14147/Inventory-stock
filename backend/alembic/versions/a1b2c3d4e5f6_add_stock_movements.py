@@ -1,7 +1,7 @@
 """add stock movement history
 
-Revision ID: a1b2c3d4e5f6
-Revises: 92a7de31c0bf
+Revision ID: b7c9d2e4f6a8
+Revises: a1b2c3d4e5f6
 Create Date: 2026-10-04
 """
 
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "a1b2c3d4e5f6"
-down_revision: Union[str, None] = "92a7de31c0bf"
+revision: str = "b7c9d2e4f6a8"
+down_revision: Union[str, None] = "a1b2c3d4e5f6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

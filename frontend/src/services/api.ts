@@ -112,12 +112,22 @@ export const saveInventory = (payload: {
   store_id: string;
   inventory_level: number;
   units_ordered: number;
-  category?: string;
   region?: string;
-}) => request<{ date: string; product_id: string; store_id: string; inventory_level: number; units_ordered: number; created: boolean }>(
-  "/api/inventory",
-  { method: "POST", body: JSON.stringify(payload) }
-);
+}) =>
+  request<{
+    date: string;
+    product_id: string;
+    store_id: string;
+    inventory_level: number;
+    units_ordered: number;
+    created: boolean;
+  }>(
+    "/api/inventory",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
 export const getProductInventory = (productId: string) =>
   request<ProductInventoryResponse>(`/api/inventory/${productId}`);
 export const getLowStock = (threshold?: number) =>

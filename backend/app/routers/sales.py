@@ -1,7 +1,6 @@
 """backend/app/routers/sales.py"""
 
 import csv
-from datetime import date, datetime
 import io
 from datetime import date, datetime
 
@@ -188,13 +187,11 @@ def record_sale(
         )
 
         sale.seasonality = payload.seasonality
-        sale.possible_stock_constrained = sale.possible_stock_constrained or payload.units_sold >= opening_stock
-        sale.source = "Real · Manual"
-
         sale.possible_stock_constrained = (
             sale.possible_stock_constrained
             or payload.units_sold >= opening_stock
         )
+        sale.source = "Real · Manual"
 
     db.commit()
 
