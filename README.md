@@ -37,7 +37,7 @@ Full diagrams land in `docs/architecture.md` (Phase 12).
 ## Technology Stack
 - Backend: Python 3.11+, FastAPI, SQLAlchemy, Alembic, PostgreSQL
 - Data/ML: pandas, NumPy, scikit-learn, XGBoost, joblib
-- NLP: Groq API (OpenAI-compatible), hybrid intent/entity layer — LLM never
+- NLP: Gemini or Groq, hybrid intent/entity layer — LLM never
   invents data, only understands language and phrases verified results
 - Frontend: React, TypeScript, Vite, Tailwind CSS, Recharts
 - Testing: pytest, FastAPI TestClient
@@ -139,20 +139,28 @@ Layered as `Router -> Service -> Repository -> Database`.
   lead-time-demand-approximation and safety-stock reasoning.
 
 ## NLP (Phase 7)
-- `backend/app/nlp/`: `rules.py` (primary, always-available regex/keyword
-  intent+entity extractor), `llm_client.py` (Groq wrapper behind a small
-  swappable interface), `parser.py` (hybrid: rules first, LLM only when
-  rules say `UNKNOWN`), `prompts.py`, `intent.py`, `entities.py`.
-- `chat_service.py`: routes to the 11 backend "tools" from spec section
-  33 (current inventory, low stock, top/bottom selling, sales trend,
-  product info, forecast, stockout risk, reorder, category/store
-  analysis), validates products against the real database before
-  computing anything, and falls back to a deterministic template
-  response whenever no LLM is available.
-- **Network note**: this sandbox can't reach `api.groq.com`, so the real
-  Groq call is untested from here — see `docs/limitations.md` for what
-  *was* verified (the full pipeline via a fake LLM client) and what you
-  should smoke-test yourself with a real key.
+- `backend/app/nlp/`: deterministic rules and date/entity extraction,
+  `tool_registry.py` (allowlisted capabilities and argument descriptions),
+  `parser.py` (rules first, structured Gemini/Groq planner fallback), and
+  provider prompts/client. The planner can select only registered backend
+  tools; it cannot generate SQL or execute arbitrary code.
+- `chat_service.py`: routes supported questions to verified database and
+  forecasting tools. It can answer stock, sales trends, recorded net sales
+  revenue, forecasts, stockout risk, reorder, category/store analysis, and
+  project-document questions retrieved from the README and limitations notes.
+  A confirmed-sale flow records sales and deducts stock only after a preview
+  is accepted. The model interprets language and phrases grounded results; it
+  cannot directly write arbitrary SQL or perform unconfirmed inventory changes.
+- Intent parsing rejects unregistered tools and malformed model output.
+  Revenue and gross-profit questions support date filters and grouping by
+  product, store, or category. Chat can combine low-stock results with recent
+  sales velocity, and lists reorder/stockout results when no product is
+  specified. Relative dates such as “last month” are parsed by the backend.
+- Product costs can be saved in Inventory; each recorded sale stores its
+  selling price, discount, and cost snapshot. Imported historical sales have
+  no cost snapshots, so their profit remains unknown. Chat confirms sales,
+  deliveries, and non-sale adjustments before changing stock; delivery and
+  damage adjustments never increase sales revenue.
 - All of the spec's example test questions (section 49) verified
   end-to-end against the live database, including unknown-product and
   missing-entity clarification handling.
@@ -235,16 +243,17 @@ overwriting products, stock changes, or sales you have entered.
 - Python 3.11+ (developed/tested against 3.12)
 - Node.js 18+ (for the frontend, Phase 9)
 - PostgreSQL 15+ (or Docker)
-- A free Groq API key: https://console.groq.com/keys (optional — the
-  system works in fully deterministic template mode without one, see
-  `docs/limitations.md`)
+- A Gemini API key from https://aistudio.google.com/app/apikey (recommended),
+  or a Groq API key from https://console.groq.com/keys (optional — the system
+  still answers supported questions with deterministic rules and templates if
+  no model key is configured; see `docs/limitations.md`)
 
 ### Quick start (local Python + local/Docker Postgres)
 ```bash
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env              # fill in GROQ_API_KEY if you have one
+cp .env.example .env              # set GEMINI_API_KEY and LLM_PROVIDER=gemini if available
 
 # Start Postgres (either):
 docker compose up -d postgres     # just the DB, via Docker

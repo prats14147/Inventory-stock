@@ -9,6 +9,7 @@ export interface CurrentInventoryRow {
   units_ordered: number;
   category: string;
   region: string;
+  cost_price?: number | null;
 }
 
 export interface StoreInventory {

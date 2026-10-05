@@ -302,6 +302,33 @@ export default function Chatbot() {
                   <div className="mt-2 text-xs opacity-70">intent carried over from the previous turn</div>
                 )}
                 {m.response && <ChatAnswerCard response={m.response} />}
+                {Array.isArray(m.response?.data?.sources) && m.response.data.sources.length > 0 && (
+                  <div className="mt-2 text-[11px] text-gray-500">
+                    Based on: {m.response.data.sources.map((source) => {
+                      const item = source as { source?: string; section?: string };
+                      return `${item.section ?? "Project notes"} (${item.source ?? "documentation"})`;
+                    }).join(" · ")}
+                  </div>
+                )}
+                {m.response?.intent === "RECORD_SALE" &&
+                  (m.response.data as Record<string, unknown> | null)?.sale_status === "awaiting_confirmation" && (
+                    <div className="mt-3 flex gap-2 border-t border-gray-200 pt-2">
+                      <button
+                        onClick={() => void send("confirm sale")}
+                        disabled={loading}
+                        className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                      >
+                        Confirm sale
+                      </button>
+                      <button
+                        onClick={() => void send("cancel sale")}
+                        disabled={loading}
+                        className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-white disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
               </div>
               )}
             </div>

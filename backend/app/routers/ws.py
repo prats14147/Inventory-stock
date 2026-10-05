@@ -46,7 +46,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import SessionLocal
 from app.nlp.intent import Intent
-from app.nlp.llm_client import GroqClient
+from app.nlp.llm_client import build_llm_client
 from app.schemas.conversation import WSChatMessage, WSError
 from app.services import chat_service
 from app.security import require_websocket_identity
@@ -59,10 +59,8 @@ _PING_INTERVAL_SECONDS = 25.0
 
 
 def _resolve_llm_client():
-    """Same rule as the REST router: only build a real client when a key is
-    configured, otherwise the chat runs fully deterministically."""
-    settings = get_settings()
-    return GroqClient() if settings.groq_api_key else None
+    """Use the same configured provider as the REST chat path."""
+    return build_llm_client()
 
 
 @router.websocket("/api/chat/ws")
@@ -236,9 +234,14 @@ def streaming_status() -> dict:
     """Small, cache-friendly probe used by the frontend to decide whether to
     upgrade the chat widget to the WebSocket transport."""
     settings = get_settings()
+    client = build_llm_client()
+    provider = type(client).__name__.removesuffix("Client").lower() if client else "disabled"
     return {
         "websocket_path": "/api/chat/ws",
-        "llm_streaming": bool(settings.groq_api_key),
+        "llm_streaming": client is not None,
+        "llm_provider": provider,
+        "llm_model": getattr(client, "model", None),
+        "llm_fallback_model": getattr(client, "fallback_model", None),
         "ping_interval_seconds": _PING_INTERVAL_SECONDS,
         "known_intents": [intent.value for intent in Intent],
     }

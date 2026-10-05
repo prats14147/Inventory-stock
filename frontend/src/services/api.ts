@@ -14,12 +14,13 @@ import type {
   DailySaleRow,
   SalesTrendResponse,
   StoreSalesSummary,
+  StoreProfitabilityResponse,
   TopProductsResponse,
 } from "../types/sales";
 import type { ForecastResponse } from "../types/forecast";
 import type { StockoutRiskResponse } from "../types/stockout";
 import type { ReorderResponse } from "../types/reorder";
-import type { ProductDetailResponse, ProductListResponse } from "../types/product";
+import type { ProductCostRow, ProductCostsResponse, ProductDetailResponse, ProductListResponse } from "../types/product";
 import type { ChatResponse } from "../types/chat";
 import type { ChatSessionHistory, ChatSessionInfo } from "../types/chat";
 import type { LiveSalesEvent, LiveSummary, SimulatorStatus, StockoutAlert } from "../types/live";
@@ -101,6 +102,12 @@ function qs(params: Record<string, string | number | boolean | undefined>): stri
 // --- Products ---
 export const getProducts = () => request<ProductListResponse>("/api/products");
 export const getProduct = (productId: string) => request<ProductDetailResponse>(`/api/products/${productId}`);
+export const getProductCosts = () => request<ProductCostsResponse>("/api/products/costs");
+export const updateProductCost = (productId: string, cost_price: number) =>
+  request<ProductCostRow>(`/api/products/${encodeURIComponent(productId)}/cost`, {
+    method: "PUT",
+    body: JSON.stringify({ cost_price }),
+  });
 
 // --- Inventory ---
 export const getCurrentInventory = (params: { category?: string; region?: string } = {}) =>
@@ -110,6 +117,7 @@ export const saveInventory = (payload: {
   store_id: string;
   inventory_level: number;
   units_ordered: number;
+  cost_price?: number;
   category?: string;
   region?: string;
 }) => request<{ date: string; product_id: string; store_id: string; inventory_level: number; units_ordered: number; created: boolean }>(
@@ -167,6 +175,7 @@ export const recordSale = (payload: {
   store_id: string;
   units_sold: number;
   price: number;
+  unit_cost?: number;
   category: string;
   region: string;
 }) => request<{
@@ -176,7 +185,16 @@ export const recordSale = (payload: {
   units_sold: number;
   daily_units_sold: number;
   remaining_inventory: number;
+  unit_cost: number | null;
+  gross_profit: number | null;
 }>("/api/sales/record", { method: "POST", body: JSON.stringify(payload) });
+
+export const getStoreProfitability = (params: {
+  store_id?: string;
+  product_id?: string;
+  start_date?: string;
+  end_date?: string;
+} = {}) => request<StoreProfitabilityResponse>(`/api/sales/profitability/by-store${qs(params)}`);
 
 export const getTopProducts = (limit = 10, start_date?: string, end_date?: string) =>
   request<TopProductsResponse>(`/api/sales/top-products${qs({ limit, start_date, end_date })}`);

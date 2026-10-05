@@ -6,9 +6,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.database import get_db
-from app.nlp.llm_client import GroqClient
+from app.nlp.llm_client import build_llm_client
 from app.schemas.conversation import (
     ChatRequest,
     ChatResponse as ConversationChatResponse,
@@ -27,13 +26,8 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
 def get_llm_client():
-    """Only build a real Groq client if a key is actually configured --
-    otherwise the chat service runs in fully deterministic template mode
-    (see docs/limitations.md)."""
-    settings = get_settings()
-    if settings.groq_api_key:
-        return GroqClient()
-    return None
+    """Build the selected optional provider, or use deterministic fallback."""
+    return build_llm_client()
 
 
 def get_chat_manager(llm_client=Depends(get_llm_client)):
@@ -51,6 +45,21 @@ def _to_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _turn_timestamp(turn: dict) -> datetime:
+    """Read timestamps from both Redis and Postgres session formats.
+
+    Redis turns use ``timestamp`` while durable Postgres turns are serialized
+    with ``created_at``. Older sessions may have either representation.
+    """
+    value = turn.get("timestamp") or turn.get("created_at")
+    if isinstance(value, datetime):
+        return _to_aware(value)
+    if value:
+        return _to_aware(datetime.fromisoformat(str(value)))
+    # Preserve a valid API response for legacy turns without timestamp data.
+    return datetime.fromtimestamp(0, tz=timezone.utc)
 
 
 def get_optional_user_id(x_user_id: Optional[str] = Header(None, alias="X-User-ID")) -> Optional[str]:
@@ -135,7 +144,7 @@ def get_session_history(
                 entities=t.get("entities", {}),
                 parse_method=t.get("parse_method"),
                 data=t.get("data", {}),
-                timestamp=_to_aware(datetime.fromisoformat(t["timestamp"])),
+                timestamp=_turn_timestamp(t),
             )
             for t in history["turns"]
         ],

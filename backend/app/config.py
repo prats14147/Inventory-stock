@@ -23,7 +23,14 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+psycopg2://inventory_user:inventory_pass@localhost:5432/inventory_db"
 
-    # LLM (Groq)
+    # LLM provider selection: auto chooses Gemini when its key is present (or
+    # when a legacy GROQ_API_KEY contains a Google AI Studio key), otherwise Groq.
+    llm_provider: str = "auto"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.8-flash"
+    gemini_fallback_model: str = "gemini-3.5-flash"
+
+    # LLM (Groq, retained for users who still use Groq)
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
 

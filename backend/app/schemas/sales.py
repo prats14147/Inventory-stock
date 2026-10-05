@@ -72,6 +72,7 @@ class RecordSaleRequest(BaseModel):
     store_id: str = Field(min_length=1, max_length=20)
     units_sold: int = Field(gt=0)
     price: float = Field(ge=0)
+    unit_cost: float | None = Field(default=None, ge=0)
     category: str = Field(min_length=1, max_length=50)
     region: str = Field(min_length=1, max_length=50)
     date: date_type | None = None
@@ -89,6 +90,8 @@ class RecordSaleResponse(BaseModel):
     units_sold: int
     daily_units_sold: int
     remaining_inventory: int
+    unit_cost: float | None = None
+    gross_profit: float | None = None
 
 
 class SalesListResponse(BaseModel):

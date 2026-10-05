@@ -47,6 +47,34 @@ def _add_time_features(dates: pd.Series, prefix: str) -> pd.DataFrame:
     )
 
 
+_TRAINING_CATEGORY_DEFAULTS = {
+    # Most common values in the dataset used to fit both saved forecast models.
+    "Category": "Furniture",
+    "Region": "East",
+    "Weather Condition": "Sunny",
+    "Seasonality": "Spring",
+}
+
+
+def _last_known_category(values: pd.Series, column: str):
+    """Use the latest training-known categorical value, skipping live defaults.
+
+    Sales entered through the application can legitimately have no weather or
+    seasonality detail and store those fields as "Unknown". The saved XGBoost
+    model was trained without that category, so passing it to predict() raises
+    an exception. Carry the latest real value from this same store/product
+    history instead; if none exists, retain the source value so data issues are
+    visible rather than fabricating a category. If no known value exists, use
+    the training-set mode so the saved XGBoost model accepts the feature.
+    """
+    for value in reversed(values.tolist()):
+        if pd.isna(value):
+            continue
+        if str(value).strip().lower() not in {"", "unknown", "none", "nan"}:
+            return value
+    return _TRAINING_CATEGORY_DEFAULTS[column]
+
+
 def build_supervised_frame(df: pd.DataFrame, horizon: int) -> pd.DataFrame:
     """
     df: cleaned dataset (one row per Date/Store ID/Product ID).
@@ -174,10 +202,10 @@ def build_live_feature_row(df: pd.DataFrame, horizon: int) -> pd.DataFrame:
             "origin_promotion": last["Holiday/Promotion"],
             "origin_competitor_pricing": last["Competitor Pricing"],
             "origin_inventory_level": last["Inventory Level"],
-            "origin_category": last["Category"],
-            "origin_region": last["Region"],
-            "origin_weather": last["Weather Condition"],
-            "origin_seasonality": last["Seasonality"],
+            "origin_category": _last_known_category(g["Category"], "Category"),
+            "origin_region": _last_known_category(g["Region"], "Region"),
+            "origin_weather": _last_known_category(g["Weather Condition"], "Weather Condition"),
+            "origin_seasonality": _last_known_category(g["Seasonality"], "Seasonality"),
             # Carried forward -- documented assumption, see docstring above.
             "target_price": last["Price"],
             "target_discount": last["Discount"],

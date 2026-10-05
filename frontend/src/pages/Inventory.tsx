@@ -7,8 +7,10 @@ import {
   ApiError,
   adjustInventory,
   getCurrentInventory,
+  getProductCosts,
   getStockMovements,
   saveInventory,
+  updateProductCost,
 } from "../services/api";
 import { LoadingState, ErrorState } from "../components/LoadingError";
 import PageHeader from "../components/PageHeader";
@@ -33,6 +35,7 @@ type SortKey =
   | "region"
   | "store_id"
   | "inventory_level"
+  | "cost_price"
   | "units_ordered";
 
 type SortDir = "asc" | "desc";
@@ -47,6 +50,7 @@ const COLUMNS: Array<{
   { key: "region", label: "Region" },
   { key: "store_id", label: "Store" },
   { key: "inventory_level", label: "Stock on Hand", numeric: true },
+  { key: "cost_price", label: "Unit Cost", numeric: true },
   { key: "units_ordered", label: "Units Ordered", numeric: true },
 ];
 
@@ -72,6 +76,7 @@ export default function Inventory() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [originalCostPrice, setOriginalCostPrice] = useState("");
 
   const [movementType, setMovementType] = useState<
     "DELIVERY" | "RETURN" | "MANUAL_CORRECTION"
@@ -85,6 +90,7 @@ export default function Inventory() {
     store_id: "",
     inventory_level: "",
     units_ordered: "0",
+    cost_price: "",
     category: "",
     region: "",
   });
@@ -122,6 +128,8 @@ export default function Inventory() {
     [category, refreshKey]
   );
 
+  const productCosts = useApi(() => getProductCosts(), [refreshKey]);
+
   // -------------------------------------------------------------------------
   // Stock movement history
   // -------------------------------------------------------------------------
@@ -151,11 +159,13 @@ export default function Inventory() {
   }
 
   function beginAdd() {
+    setOriginalCostPrice("");
     setForm({
       product_id: "",
       store_id: "",
       inventory_level: "",
       units_ordered: "0",
+      cost_price: "",
       category: "",
       region: "",
     });
@@ -167,11 +177,15 @@ export default function Inventory() {
   }
 
   function beginEdit(row: NonNullable<typeof data>[number]) {
+    const savedCost = productCosts.data?.products.find((product) => product.product_id === row.product_id)?.cost_price;
+    const costPrice = savedCost == null ? "" : String(savedCost);
+    setOriginalCostPrice(costPrice);
     setForm({
       product_id: row.product_id,
       store_id: row.store_id,
       inventory_level: String(row.inventory_level),
       units_ordered: String(row.units_ordered),
+      cost_price: costPrice,
       category: CATEGORIES.includes(row.category) ? row.category : "",
       region: REGIONS.includes(row.region) ? row.region : "",
     });
@@ -204,6 +218,7 @@ export default function Inventory() {
     setSaving(true);
     setFormError("");
     setSuccessMessage("");
+    let movementRecorded = false;
 
     try {
       const productId = form.product_id.trim();
@@ -218,45 +233,57 @@ export default function Inventory() {
       // ---------------------------------------------------------------
 
       if (existingFormRow) {
+        const hasMovement = quantityDelta.trim() !== "";
+        const costChanged = form.cost_price.trim() !== originalCostPrice;
         const delta = Number(quantityDelta);
 
-        if (!Number.isInteger(delta) || delta === 0) {
-          throw new Error(
-            "Quantity change must be a non-zero whole number."
-          );
+        if (!hasMovement && !costChanged) {
+          throw new Error("Change the unit cost or enter a stock movement.");
         }
 
-        if (
+        if (hasMovement && (!Number.isInteger(delta) || delta === 0)) {
+          throw new Error("Quantity change must be a non-zero whole number.");
+        }
+
+        if (costChanged && !form.cost_price.trim()) {
+          throw new Error("Enter a unit cost. To remove a saved cost, set it to 0.");
+        }
+
+        if (hasMovement && (
           (movementType === "DELIVERY" || movementType === "RETURN") &&
           delta <= 0
-        ) {
+        )) {
           throw new Error(
             "Delivery and Return quantities must be positive."
           );
         }
 
-        if (!movementReason.trim()) {
+        if (hasMovement && !movementReason.trim()) {
           throw new Error(
             "Please enter a reason for this stock movement."
           );
         }
 
-        const result = await adjustInventory({
-          product_id: productId,
-          store_id: storeId,
-          movement_type: movementType,
-          quantity_delta: delta,
-          reason: movementReason.trim(),
-        });
-
-        setSuccessMessage(
-          `${movementType.replace(
-            "_",
-            " "
-          )} recorded for ${result.product_id} at ${
-            result.store_id
-          }: ${result.quantity_before} → ${result.quantity_after}.`
-        );
+        let movementMessage = "";
+        if (hasMovement) {
+          const result = await adjustInventory({
+            product_id: productId,
+            store_id: storeId,
+            movement_type: movementType,
+            quantity_delta: delta,
+            reason: movementReason.trim(),
+          });
+          movementRecorded = true;
+          movementMessage = `${movementType.replace("_", " ")} recorded: ${result.quantity_before} → ${result.quantity_after}.`;
+        }
+        if (costChanged) {
+          await updateProductCost(productId, Number(form.cost_price));
+          setOriginalCostPrice(form.cost_price.trim());
+        }
+        setSuccessMessage([
+          movementMessage,
+          costChanged ? `Unit cost saved for ${productId}.` : "",
+        ].filter(Boolean).join(" "));
       } else {
         // -------------------------------------------------------------
         // New product/store = create the starting inventory record
@@ -281,6 +308,7 @@ export default function Inventory() {
           units_ordered: Number(form.units_ordered),
           category: form.category,
           region: form.region,
+          cost_price: form.cost_price.trim() ? Number(form.cost_price) : undefined,
         });
 
         setSuccessMessage(
@@ -294,11 +322,12 @@ export default function Inventory() {
       resetMovementFields();
       setRefreshKey((key) => key + 1);
     } catch (err) {
-      setFormError(
-        err instanceof ApiError || err instanceof Error
-          ? err.message
-          : "Could not save this stock record. Please try again."
-      );
+      const errorMessage = err instanceof ApiError || err instanceof Error
+        ? err.message
+        : "Could not save this stock record. Please try again.";
+      setFormError(movementRecorded
+        ? `The stock movement was recorded, but the unit cost could not be saved: ${errorMessage}`
+        : errorMessage);
     } finally {
       setSaving(false);
     }
@@ -308,8 +337,17 @@ export default function Inventory() {
   // Inventory filtering
   // -------------------------------------------------------------------------
 
+  const costByProduct = useMemo(
+    () => new Map((productCosts.data?.products ?? []).map((product) => [product.product_id, product.cost_price])),
+    [productCosts.data]
+  );
+  const inventoryRows = useMemo(
+    () => (data ?? []).map((row) => ({ ...row, cost_price: costByProduct.get(row.product_id) ?? null })),
+    [data, costByProduct]
+  );
+
   const rows = useMemo(() => {
-    let filtered = data ?? [];
+    let filtered = inventoryRows;
 
     if (productFilter) {
       filtered = filtered.filter(
@@ -330,7 +368,7 @@ export default function Inventory() {
     }
 
     return filtered;
-  }, [data, productFilter, storeFilter, statusFilter]);
+  }, [inventoryRows, productFilter, storeFilter, statusFilter]);
 
   // -------------------------------------------------------------------------
   // Inventory sorting and pagination
@@ -487,6 +525,8 @@ export default function Inventory() {
         }
       />
 
+      {formError && !formOpen && <p role="alert" className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{formError}</p>}
+
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand-100 bg-brand-50 px-4 py-3">
         <p className="text-sm text-gray-700">
           Add a new product with starting stock, or record a
@@ -580,7 +620,7 @@ export default function Inventory() {
 
             {!existingFormRow && (
               <>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                   <label className="space-y-1 text-sm font-medium text-gray-700">
                     Starting Stock
 
@@ -618,6 +658,19 @@ export default function Inventory() {
                             e.target.value,
                         })
                       }
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                    />
+                  </label>
+
+                  <label className="space-y-1 text-sm font-medium text-gray-700">
+                    Unit Cost (optional)
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.cost_price}
+                      onChange={(e) => setForm({ ...form, cost_price: e.target.value })}
+                      placeholder="e.g. 4.50"
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
                     />
                   </label>
@@ -699,6 +752,24 @@ export default function Inventory() {
                 <div className="rounded-lg border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-gray-700">
                   <strong>Current stock:</strong>{" "}
                   {existingFormRow.inventory_level} units
+                </div>
+
+                <div className="max-w-sm space-y-1">
+                  <label className="space-y-1 text-sm font-medium text-gray-700">
+                    Unit Cost
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.cost_price}
+                      onChange={(event) => setForm({ ...form, cost_price: event.target.value })}
+                      placeholder="Enter purchase cost per unit"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                    />
+                  </label>
+                  <p className="text-xs text-gray-500">
+                    Applies to this product across stores. Recorded sales keep their saved cost history.
+                  </p>
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -814,7 +885,11 @@ export default function Inventory() {
                 {saving
                   ? "Saving…"
                   : existingFormRow
-                  ? "Record movement"
+                  ? quantityDelta.trim()
+                    ? form.cost_price.trim() !== originalCostPrice
+                      ? "Save stock and cost"
+                      : "Record movement"
+                    : "Save unit cost"
                   : "Add product"}
               </button>
 
@@ -1005,6 +1080,10 @@ export default function Inventory() {
 
                       <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-900">
                         {r.inventory_level}
+                      </td>
+
+                      <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-600">
+                        {r.cost_price == null ? "—" : `$${r.cost_price.toFixed(2)}`}
                       </td>
 
                       <td className="whitespace-nowrap px-4 py-2 tabular-nums text-gray-600">

@@ -412,7 +412,14 @@ class HybridSessionStore(SessionStore):
             return session
         # Fall back to Postgres (durable)
         if self.postgres_store:
-            return self.postgres_store.get_session(session_id)
+            session = self.postgres_store.get_session(session_id)
+            if session:
+                # Redis may have expired an active-session key while the
+                # durable Postgres row still exists. Rehydrate the fast store
+                # before returning: add_turn() writes to Redis first and
+                # otherwise rejects this valid, recovered session.
+                self.redis_store.save_session(session)
+            return session
         return None
 
     def save_session(self, session: SessionData) -> None:

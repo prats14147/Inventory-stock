@@ -186,7 +186,11 @@ def get_sales_trend(
     return [dict(row._mapping) for row in db.execute(stmt).all()]
 
 
-def get_category_sales_summary(db: Session) -> list[dict]:
+def get_category_sales_summary(
+    db: Session,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[dict]:
     stmt = (
         select(
             DailySales.category,
@@ -195,10 +199,18 @@ def get_category_sales_summary(db: Session) -> list[dict]:
         .group_by(DailySales.category)
         .order_by(func.sum(DailySales.units_sold).desc())
     )
+    if start_date:
+        stmt = stmt.where(DailySales.date >= start_date)
+    if end_date:
+        stmt = stmt.where(DailySales.date <= end_date)
     return [dict(row._mapping) for row in db.execute(stmt).all()]
 
 
-def get_store_sales_summary(db: Session) -> list[dict]:
+def get_store_sales_summary(
+    db: Session,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[dict]:
     stmt = (
         select(
             DailySales.store_id,
@@ -207,4 +219,8 @@ def get_store_sales_summary(db: Session) -> list[dict]:
         .group_by(DailySales.store_id)
         .order_by(func.sum(DailySales.units_sold).desc())
     )
+    if start_date:
+        stmt = stmt.where(DailySales.date >= start_date)
+    if end_date:
+        stmt = stmt.where(DailySales.date <= end_date)
     return [dict(row._mapping) for row in db.execute(stmt).all()]

@@ -1,6 +1,6 @@
 """backend/app/models/product.py"""
 
-from sqlalchemy import String
+from sqlalchemy import Float, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -17,6 +17,9 @@ class Product(Base):
     __tablename__ = "products"
 
     product_id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    # Current catalog cost used as the default for new sale transactions.
+    # Each transaction stores its own immutable cost snapshot.
+    cost_price: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     inventory_records = relationship("DailyInventory", back_populates="product")
     sales_records = relationship("DailySales", back_populates="product")

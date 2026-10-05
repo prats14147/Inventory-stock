@@ -4,25 +4,36 @@
 export type Intent =
   | "CURRENT_STOCK"
   | "LOW_STOCK"
+  | "LOW_STOCK_FAST_SELLING"
+  | "STOCK_HISTORY"
   | "TOP_SELLING"
   | "BOTTOM_SELLING"
   | "SALES_TREND"
+  | "REVENUE_ANALYSIS"
+  | "FINANCIAL_ANALYSIS"
+  | "STORE_PROFITABILITY"
   | "PRODUCT_INFO"
   | "DEMAND_FORECAST"
   | "STOCKOUT_RISK"
   | "REORDER_RECOMMENDATION"
   | "CATEGORY_ANALYSIS"
   | "STORE_ANALYSIS"
+  | "RECORD_SALE"
+  | "RECEIVE_STOCK"
+  | "ADJUST_STOCK"
   | "HELP"
   | "UNKNOWN";
 
 export interface Entities {
   product_id: string | null;
+  product_reference?: string | null;
   store_id: string | null;
   category: string | null;
   date: string | null;
   date_range: Record<string, string> | null;
   forecast_horizon: number | null;
+  group_by?: string | null;
+  granularity?: string | null;
 }
 
 export interface ChatRequest {
@@ -39,7 +50,7 @@ export interface ChatResponse {
   // "context" = intent carried forward from the previous turn (backend
   // app/services/chat_service.py). Surfaced in the UI so a demo can show
   // exactly how a question was understood.
-  parse_method: "rules" | "llm" | "context" | "command";
+  parse_method: "rules" | "llm" | "context" | "command" | "knowledge";
   data: Record<string, unknown> | null;
   /** The conversation this turn belongs to -- persist it to keep chatting. */
   session_id: string;

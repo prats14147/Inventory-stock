@@ -1,8 +1,8 @@
 """backend/app/models/sales.py"""
 
-from datetime import date as date_type
+from datetime import date as date_type, datetime
 
-from sqlalchemy import Boolean, Date, Float, ForeignKey, Index, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -46,3 +46,23 @@ class DailySales(Base):
 
     def __repr__(self) -> str:
         return f"<DailySales {self.date} {self.store_id}/{self.product_id} sold={self.units_sold}>"
+
+
+class SalesTransaction(Base):
+    """One manually recorded sale with price and cost snapshots for profit."""
+
+    __tablename__ = "sales_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
+    business_date: Mapped[date_type] = mapped_column(Date, nullable=False, index=True)
+    store_id: Mapped[str] = mapped_column(String(20), ForeignKey("stores.store_id"), nullable=False, index=True)
+    product_id: Mapped[str] = mapped_column(String(20), ForeignKey("products.product_id"), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(String(50), nullable=False)
+    units_sold: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_price: Mapped[float] = mapped_column(Float, nullable=False)
+    discount_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    product = relationship("Product")
+    store = relationship("Store")

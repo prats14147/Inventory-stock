@@ -77,15 +77,6 @@ app = FastAPI(
 allowed_origins = [origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()]
 if not allowed_origins or "*" in allowed_origins:
     raise RuntimeError("CORS_ALLOWED_ORIGINS must list specific trusted website origins; '*' is not allowed.")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type"],
-)
-
-
 @app.middleware("http")
 async def protect_api(request: Request, call_next):
     # Health remains public for readiness probes, and login must be reachable
@@ -100,6 +91,18 @@ async def protect_api(request: Request, call_next):
                 headers=exc.headers,
             )
     return await call_next(request)
+
+
+# Add CORS after the auth middleware so Starlette places it on the outside.
+# That way even the auth middleware's 401 response includes CORS headers and
+# browsers can report "Sign in" instead of a misleading network failure.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 
 @app.exception_handler(NotFoundError)

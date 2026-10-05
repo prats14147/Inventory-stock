@@ -111,40 +111,49 @@ plainly to any reader of the forecasting results, not glossed over.
 
 ## NLP / chatbot design (Phase 7)
 
-- **Hybrid architecture, genuinely hybrid**: a rule-based (regex/keyword)
-  intent+entity extractor is the PRIMARY layer — deterministic, free, and
-  always available. The LLM (Groq) is only consulted when the rules
-  return `UNKNOWN`, and only for phrasing the final response when
-  available. Verified: for every one of the spec's example test
-  questions (section 49), the rule-based layer alone classifies
-  correctly — the system does not depend on the LLM being reachable to
-  answer any of them.
-- **This sandbox cannot reach `api.groq.com`** (its network allowlist
-  doesn't include it), so the real Groq call could not be tested live
-  from here. To handle this honestly rather than skip testing entirely:
-  the LLM sits behind a small `complete_json`/`complete_text` interface,
-  and the whole pipeline (JSON parsing, entity validation, malicious/
-  unexpected-key stripping, graceful fallback on failure) is tested with
-  a `FakeLLMClient` returning canned responses. **You should smoke-test
-  the real `GroqClient` once you have a real `GROQ_API_KEY` set** —
-  everything else has been verified against the live database.
-- **No-hallucination policy is structural, not just a prompt
-  instruction**: every product-requiring intent checks
-  `product_repository.product_exists` against the real database *before*
-  any tool runs — an unknown product always gets a fixed "not found"
-  message, never a fabricated number (tested for P9999). LLM JSON output
-  is parsed and filtered against the known `Entities` fields — an
-  injected/unexpected key (tested with a simulated `"malicious_field"`)
-  is silently dropped, never trusted.
-- **Deterministic template fallback**: every intent has a hand-written
-  template formatter, used whenever no LLM client is passed or the LLM
-  call fails. This means the system produces a legitimate, data-grounded
-  answer with zero network dependency — the LLM only ever makes the
-  phrasing nicer, never supplies facts.
-- 27 new tests passing (rule-based classification across all spec
-  example questions, LLM-fallback pipeline via fake client, and the full
-  chat pipeline against the live database) — 56/56 across the whole
-  project.
+- The chatbot uses deterministic rules first for common questions and
+  safety-sensitive stock actions. For wording the rules do not recognize,
+  the configured Gemini or Groq model returns a structured choice from the
+  allowlisted capabilities in `app/nlp/tool_registry.py`; execution remains
+  in the explicit backend service map in `chat_service.py`.
+- Questions about how the app works can retrieve relevant passages from
+  checked-in README, data, and limitations documentation. It shows the
+  supporting sections and does not browse the web or scan arbitrary files.
+- Invalid model JSON, unknown tools, and malformed entity objects are
+  discarded. Product/store IDs and date filters are taken from deterministic
+  extraction or conversation context, not invented planner arguments. The
+  final model wording is discarded if it introduces numeric values absent
+  from the verified backend result; deterministic templates then answer.
+- Read questions cover stock, sales trends, net revenue, gross profit/loss
+  by product/store/category, forecasts, stockout risk, reorder, and
+  category/store summaries. Relative and named month/date ranges are parsed
+  before querying. A composite tool combines low-stock items with sales
+  velocity over the latest 30 days in the available sales history.
+- Net revenue uses recorded units, listed prices, and discounts. Gross
+  profit/loss uses sale-level unit-cost snapshots; imported history without
+  costs is excluded. This is not net accounting profit because operating
+  expenses are not tracked.
+- Customer sales, received stock, and non-sale adjustments are distinct.
+  Chat prepares previews and requires confirmation before changing stock;
+  damage/receiving movements do not create sales or revenue records.
+- Capability coverage is bounded by the registry and stored data. Products
+  are currently identified by P-codes only; a friendly name cannot be
+  resolved because the product table has no product-name field. Ambiguous or
+  unsupported questions should be clarified. The model cannot run arbitrary
+  SQL or safely perform unconfirmed actions.
+
+## Product cost and store gross profit
+
+- `products.cost_price` is the current default cost for future recorded
+  sales. Each manually recorded sale also saves its own unit selling price,
+  discount, and unit-cost snapshot in `sales_transactions`; later catalog
+  cost edits do not rewrite earlier transaction costs.
+- The profitability report groups recorded sale transactions by store and
+  compares discounted revenue with the known cost of goods sold. It reports
+  cost coverage and leaves profit unknown when there are no known costs.
+- Existing imported `daily_sales` records remain useful for sales analysis,
+  but their prices are aggregate source values and they have no cost
+  snapshots. The app does not guess their profit retroactively.
 
 ## Frontend (Phase 9)
 

@@ -25,6 +25,14 @@ model feature (would leak the thing we're trying to predict); 673 rows
 | Competitor Pricing | numeric |
 | Seasonality | categorical |
 
+`Units Ordered` is the source dataset's recorded order quantity for that
+date/store/product row. It is not on-hand stock (use `Inventory Level`),
+and the source does not include a supplier name or order status.
+
+`Units Ordered` is the source dataset's recorded order quantity for that
+date/store/product row. It is not on-hand stock (use `Inventory Level`),
+and the source does not include a supplier name or order status.
+
 ## Known data-quality findings (from initial inspection)
 
 - 0 missing values, 0 duplicate rows.

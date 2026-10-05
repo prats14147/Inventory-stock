@@ -22,6 +22,7 @@ class InventoryUpsertRequest(BaseModel):
     store_id: str = Field(min_length=1, max_length=20)
     inventory_level: int = Field(ge=0)
     units_ordered: int = Field(default=0, ge=0)
+    cost_price: float | None = Field(default=None, ge=0)
     category: str | None = Field(default=None, min_length=1, max_length=50)
     region: str | None = Field(default=None, min_length=1, max_length=50)
 

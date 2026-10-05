@@ -48,3 +48,24 @@ export interface StoreSalesSummary {
   store_id: string;
   total_units_sold: number;
 }
+
+export interface StoreProfitability {
+  store_id: string;
+  transaction_count: number;
+  units_sold: number;
+  units_with_cost: number;
+  units_without_cost: number;
+  cost_coverage_percent: number;
+  net_sales_revenue: number;
+  costed_net_revenue: number;
+  known_cost_of_goods_sold: number;
+  gross_profit_or_loss: number | null;
+  gross_margin_percent: number | null;
+  condition: "unknown" | "profit" | "loss" | "break_even";
+}
+
+export interface StoreProfitabilityResponse {
+  items: StoreProfitability[];
+  filters: Record<string, string | null>;
+  cost_note: string;
+}
