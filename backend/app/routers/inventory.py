@@ -1,6 +1,6 @@
 """backend/app/routers/inventory.py"""
 
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -112,10 +112,7 @@ def adjust_inventory(
     db: Session = Depends(get_db),
 ):
     """Record a delivery, return, or manual stock correction."""
-    try:
-        return inventory_service.adjust_stock(db, payload)
-    except (NotFoundError, InvalidRequestError) as exc:
-        raise HTTPException(status_code=404 if isinstance(exc, NotFoundError) else 400, detail=str(exc)) from exc
+    return inventory_service.adjust_stock(db, payload)
 
 
 @router.get("", response_model=list[CurrentInventoryRow])

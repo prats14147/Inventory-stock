@@ -103,6 +103,14 @@ def adjust_stock(db: Session, payload: StockAdjustmentRequest, source: str = "in
     after = before + payload.quantity_delta
     if after < 0:
         raise InvalidRequestError("Stock cannot become negative.")
+    if payload.movement_type in {"DELIVERY", "RETURN"} and payload.quantity_delta < 0:
+        raise InvalidRequestError(f"{payload.movement_type} quantity must be positive.")
+    if payload.movement_type == "DELIVERY":
+        if payload.quantity_delta > row.units_ordered:
+            raise InvalidRequestError(
+                f"Cannot deliver {payload.quantity_delta} units. Only {row.units_ordered} units are currently ordered."
+            )
+        row.units_ordered -= payload.quantity_delta
     row.inventory_level = after
     db.add(StockMovement(
         occurred_at=datetime.now(), business_date=as_of, store_id=payload.store_id,

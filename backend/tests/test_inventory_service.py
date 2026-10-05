@@ -59,7 +59,7 @@ def test_delivery_and_damage_adjustments_change_stock_without_recording_sales(db
     as_of = inventory_repository.get_latest_date(db) or date.today()
     db.add_all([Product(product_id=product_id), Store(store_id=store_id)])
     stock = DailyInventory(date=as_of, store_id=store_id, product_id=product_id,
-                           inventory_level=10, units_ordered=0, category="Testing", region="Test")
+                           inventory_level=10, units_ordered=30, category="Testing", region="Test")
     db.add(stock)
     db.flush()
     # The application service normally commits. Keep this test's changes in
@@ -76,6 +76,8 @@ def test_delivery_and_damage_adjustments_change_stock_without_recording_sales(db
     ))
 
     assert received.quantity_after == 30
+    db.refresh(stock)
+    assert stock.units_ordered == 10
     assert damaged.quantity_after == 28
     assert db.query(StockMovement).filter_by(product_id=product_id).count() == 2
     assert db.query(SalesTransaction).filter_by(product_id=product_id).count() == 0
@@ -84,8 +86,14 @@ def test_delivery_and_damage_adjustments_change_stock_without_recording_sales(db
             product_id=product_id, store_id=store_id, movement_type=MANUAL_CORRECTION,
             quantity_delta=-100, reason="Exceeds available stock",
         ))
+    with pytest.raises(InvalidRequestError, match="Only 10 units are currently ordered"):
+        inventory_service.adjust_stock(db, StockAdjustmentRequest(
+            product_id=product_id, store_id=store_id, movement_type=DELIVERY,
+            quantity_delta=11, reason="Exceeds outstanding order",
+        ))
     db.refresh(stock)
     assert stock.inventory_level == 28
+    assert stock.units_ordered == 10
 
 
 def test_low_stock_default_threshold_from_settings(db):
