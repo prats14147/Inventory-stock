@@ -22,7 +22,7 @@ import type {
 import type { ForecastResponse } from "../types/forecast";
 import type { StockoutRiskResponse } from "../types/stockout";
 import type { ReorderResponse } from "../types/reorder";
-import type { ProductCostRow, ProductCostsResponse, ProductDetailResponse, ProductListResponse } from "../types/product";
+import type { ProductCostRow, ProductCostsResponse, ProductDetailResponse, ProductListResponse, ProductSummary} from "../types/product";
 import type { ChatResponse } from "../types/chat";
 import type { ChatSessionHistory, ChatSessionInfo } from "../types/chat";
 import type { LiveSalesEvent, LiveSummary, SimulatorStatus, StockoutAlert } from "../types/live";
@@ -103,6 +103,17 @@ function qs(params: Record<string, string | number | boolean | undefined>): stri
 
 // --- Products ---
 export const getProducts = () => request<ProductListResponse>("/api/products");
+export const createProduct = (payload: {
+  product_id?: string;
+  name: string;
+  sku: string;
+  category: string;
+  cost_price?: number;
+}) =>
+  request<ProductSummary>("/api/products", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 export const getProduct = (productId: string) => request<ProductDetailResponse>(`/api/products/${productId}`);
 export const getProductCosts = () => request<ProductCostsResponse>("/api/products/costs");
 export const updateProductCost = (productId: string, cost_price: number) =>

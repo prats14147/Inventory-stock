@@ -1,18 +1,23 @@
 """backend/app/routers/products.py"""
 
-from fastapi import APIRouter, Depends
+import re
+
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Product
-from app.repositories import product_repository, sales_repository
+from app.models.product import Product
+from app.repositories import product_repository
+
 from app.schemas.product import (
     ProductCostRow,
     ProductCostsResponse,
     ProductCostUpdateRequest,
+    ProductCreateRequest,
     ProductDetailResponse,
     ProductListResponse,
+    ProductSummary,
 )
 from app.services import inventory_service
 
@@ -28,6 +33,61 @@ def list_products(db: Session = Depends(get_db)):
         products=products,
         count=len(products),
     )
+
+def _next_product_id(db: Session) -> str:
+    product_ids = db.scalars(select(Product.product_id)).all()
+
+    numbers = []
+    for product_id in product_ids:
+        match = re.fullmatch(r"P(\d+)", product_id)
+        if match:
+            numbers.append(int(match.group(1)))
+
+    return f"P{max(numbers, default=0) + 1:04d}"
+
+
+@router.post("", response_model=ProductSummary, status_code=201)
+def create_product(
+    payload: ProductCreateRequest,
+    db: Session = Depends(get_db),
+):
+    sku = payload.sku.strip()
+
+    existing_sku = db.execute(
+        select(Product).where(Product.sku == sku)
+    ).scalar_one_or_none()
+
+    if existing_sku:
+        raise HTTPException(
+            status_code=409,
+            detail=f"SKU '{sku}' is already in use.",
+        )
+
+    product_id = (
+        payload.product_id.strip()
+        if payload.product_id
+        else _next_product_id(db)
+    )
+
+    if db.get(Product, product_id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Product ID '{product_id}' already exists.",
+        )
+
+    product = Product(
+        product_id=product_id,
+        name=payload.name.strip(),
+        sku=sku,
+        category=payload.category.strip(),
+        cost_price=payload.cost_price,
+    )
+
+    db.add(product)
+    db.commit()
+    db.refresh(product)
+
+    return product
 
 
 @router.get("/costs", response_model=ProductCostsResponse)

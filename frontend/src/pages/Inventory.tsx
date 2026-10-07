@@ -6,6 +6,7 @@ import { useApi } from "../hooks/useApi";
 import {
   ApiError,
   adjustInventory,
+  createProduct,
   getCurrentInventory,
   getProductCosts,
   getProducts,
@@ -201,14 +202,18 @@ export default function Inventory() {
   const [originalCostPrice, setOriginalCostPrice] =
     useState("");
 
-  const [form, setForm] = useState({
-    product_id: "",
-    store_id: "",
-    inventory_level: "",
-    units_ordered: "0",
-    cost_price: "",
-    region: "",
-  });
+    const [form, setForm] = useState({
+      product_id: "",
+      product_name: "",
+      sku: "",
+      category: "",
+      store_id: "",
+      inventory_level: "",
+      units_ordered: "0",
+      cost_price: "",
+      region: "",
+    });
+    
 
   /*
    * Deep link:
@@ -280,11 +285,11 @@ export default function Inventory() {
 
   const {
     data: productsData,
-    loading: productsLoading,
-    error: productsError,
+    loading: _productsLoading,
+    error: _productsError,
   } = useApi(
     () => getProducts(),
-    []
+    [refreshKey]
   );
 
   const { data: productCosts } = useApi(
@@ -387,6 +392,9 @@ export default function Inventory() {
   function beginAdd() {
     setForm({
       product_id: "",
+      product_name: "",
+      sku: "",
+      category: "",
       store_id: "",
       inventory_level: "",
       units_ordered: "0",
@@ -404,23 +412,41 @@ export default function Inventory() {
   function beginEdit(
     row: NonNullable<typeof data>[number]
   ) {
+    const product =
+      productMap.get(row.product_id);
+
     setForm({
       product_id: row.product_id,
+      product_name: product?.name ?? "",
+      sku: product?.sku ?? "",
+      category: product?.category ?? row.category,
       store_id: row.store_id,
       inventory_level:
         String(row.inventory_level),
       units_ordered:
         String(row.units_ordered),
-      cost_price: costByProduct.get(row.product_id) == null
-        ? ""
-        : String(costByProduct.get(row.product_id)),
-      region: REGIONS.includes(row.region)
-        ? row.region
-        : "",
+      cost_price:
+        costByProduct.get(row.product_id) == null
+          ? ""
+          : String(
+              costByProduct.get(row.product_id)
+            ),
+      region:
+        REGIONS.includes(row.region)
+          ? row.region
+          : "",
     });
 
     resetMovementFields();
-    setOriginalCostPrice(costByProduct.get(row.product_id) == null ? "" : String(costByProduct.get(row.product_id)));
+
+    setOriginalCostPrice(
+      costByProduct.get(row.product_id) == null
+        ? ""
+        : String(
+            costByProduct.get(row.product_id)
+          )
+    );
+
     setFormError("");
     setSuccessMessage("");
     setFormOpen(true);
@@ -431,11 +457,8 @@ export default function Inventory() {
   // -------------------------------------------------------------------------
 
   const existingFormRow = useMemo(() => {
-    const productId =
-      form.product_id.trim();
-
-    const storeId =
-      form.store_id.trim();
+    const productId = form.product_id.trim();
+    const storeId = form.store_id.trim();
 
     if (!productId || !storeId) {
       return undefined;
@@ -464,103 +487,164 @@ export default function Inventory() {
     setSaving(true);
     setFormError("");
     setSuccessMessage("");
+
     let movementRecorded = false;
 
     try {
-      const productId =
-        form.product_id.trim();
-
-      const storeId =
-        form.store_id.trim();
-
-      if (!productId || !storeId) {
-        throw new Error(
-          "Please select a product and enter a Store ID."
-        );
-      }
+      const productId = form.product_id.trim();
+      const productName = form.product_name.trim();
+      const sku = form.sku.trim();
+      const category = form.category.trim();
+      const storeId = form.store_id.trim();
 
       // ---------------------------------------------------------------
       // Existing product/store = record a stock movement
       // ---------------------------------------------------------------
 
       if (existingFormRow) {
-        const costChanged = form.cost_price.trim() !== originalCostPrice;
-        const hasMovement = quantityDelta.trim() !== "";
+        const costChanged =
+          form.cost_price.trim() !== originalCostPrice;
+
+        const hasMovement =
+          quantityDelta.trim() !== "";
+
         const delta =
           Number(quantityDelta);
 
         if (!hasMovement && !costChanged) {
-          throw new Error("Change the unit cost or enter a stock movement.");
+          throw new Error(
+            "Change the unit cost or enter a stock movement."
+          );
         }
 
-        if (hasMovement && (
-          !Number.isInteger(delta) ||
-          delta === 0
-        )) {
+        if (
+          hasMovement &&
+          (
+            !Number.isInteger(delta) ||
+            delta === 0
+          )
+        ) {
           throw new Error(
             "Quantity change must be a non-zero whole number."
           );
         }
 
-        if (hasMovement && (
-          (movementType === "DELIVERY" ||
-            movementType === "RETURN") &&
+        if (
+          hasMovement &&
+          (
+            movementType === "DELIVERY" ||
+            movementType === "RETURN"
+          ) &&
           delta <= 0
-        )) {
+        ) {
           throw new Error(
             "Delivery and Return quantities must be positive."
           );
         }
 
-        if (hasMovement && !movementReason.trim()) {
+        if (
+          hasMovement &&
+          !movementReason.trim()
+        ) {
           throw new Error(
             "Please enter a reason for this stock movement."
           );
         }
 
-        if (costChanged && !form.cost_price.trim()) {
-          throw new Error("Enter a unit cost. To remove a saved cost, set it to 0.");
+        if (
+          costChanged &&
+          !form.cost_price.trim()
+        ) {
+          throw new Error(
+            "Enter a unit cost. To remove a saved cost, set it to 0."
+          );
         }
-        const parsedCost = Number(form.cost_price);
-        if (costChanged && (!Number.isFinite(parsedCost) || parsedCost < 0)) {
-          throw new Error("Unit cost must be zero or greater.");
+
+        const parsedCost =
+          Number(form.cost_price);
+
+        if (
+          costChanged &&
+          (
+            !Number.isFinite(parsedCost) ||
+            parsedCost < 0
+          )
+        ) {
+          throw new Error(
+            "Unit cost must be zero or greater."
+          );
         }
 
         let movementMessage = "";
+
         if (hasMovement) {
           const result = await adjustInventory({
             product_id: productId,
             store_id: storeId,
-            movement_type:
-              movementType,
+            movement_type: movementType,
             quantity_delta: delta,
-            reason:
-              movementReason.trim(),
+            reason: movementReason.trim(),
           });
-          movementRecorded = true;
-          movementMessage = `${movementType.replace("_", " ")} recorded for ${result.product_id} at ${result.store_id}: ${result.quantity_before} → ${result.quantity_after}.`;
-        }
-        if (costChanged) {
-          await updateProductCost(productId, parsedCost);
-          setOriginalCostPrice(form.cost_price.trim());
-        }
-        setSuccessMessage([movementMessage, costChanged ? `Unit cost saved for ${productId}.` : ""].filter(Boolean).join(" "));
-      } else {
-        // -------------------------------------------------------------
-        // New product/store = create starting inventory record
-        // -------------------------------------------------------------
 
-        if (
-          !productMap.has(productId)
-        ) {
-          throw new Error(
-            "Please select a valid product from the product catalog."
+          movementRecorded = true;
+
+          movementMessage =
+            `${movementType.replace("_", " ")} recorded for ` +
+            `${result.product_id} at ${result.store_id}: ` +
+            `${result.quantity_before} → ${result.quantity_after}.`;
+        }
+
+        if (costChanged) {
+          await updateProductCost(
+            productId,
+            parsedCost
+          );
+
+          setOriginalCostPrice(
+            form.cost_price.trim()
           );
         }
 
-        if (
-          !form.inventory_level.trim()
-        ) {
+        setSuccessMessage(
+          [
+            movementMessage,
+            costChanged
+              ? `Unit cost saved for ${productId}.`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ")
+        );
+      } else {
+        // ---------------------------------------------------------------
+        // New product/store = create product + starting inventory
+        // ---------------------------------------------------------------
+
+        if (!productName) {
+          throw new Error(
+            "Please enter a product name."
+          );
+        }
+
+        if (!sku) {
+          throw new Error(
+            "Please enter an SKU."
+          );
+        }
+
+        if (!category) {
+          throw new Error(
+            "Please select a category."
+          );
+        }
+
+        if (!storeId) {
+          throw new Error(
+            "Please enter a Store ID."
+          );
+        }
+
+        if (!form.inventory_level.trim()) {
           throw new Error(
             "Please enter the starting stock."
           );
@@ -579,9 +663,7 @@ export default function Inventory() {
           Number(form.units_ordered);
 
         if (
-          !Number.isInteger(
-            startingStock
-          ) ||
+          !Number.isInteger(startingStock) ||
           startingStock < 0
         ) {
           throw new Error(
@@ -590,9 +672,7 @@ export default function Inventory() {
         }
 
         if (
-          !Number.isInteger(
-            unitsOrdered
-          ) ||
+          !Number.isInteger(unitsOrdered) ||
           unitsOrdered < 0
         ) {
           throw new Error(
@@ -600,41 +680,68 @@ export default function Inventory() {
           );
         }
 
+        const costPrice =
+          form.cost_price.trim()
+            ? Number(form.cost_price)
+            : undefined;
+
+        if (
+          costPrice !== undefined &&
+          (
+            !Number.isFinite(costPrice) ||
+            costPrice < 0
+          )
+        ) {
+          throw new Error(
+            "Unit cost must be zero or greater."
+          );
+        }
+
+        // Create the new product in the catalog.
+        // The backend automatically generates the next Product ID,
+        // for example P0021, P0022, P0023, etc.
+        const createdProduct =
+          await createProduct({
+            name: productName,
+            sku,
+            category,
+            cost_price: costPrice,
+          });
+
+        // Use the newly generated Product ID when creating inventory.
+        const newProductId =
+          createdProduct.product_id;
+
         const result =
           await saveInventory({
-            product_id: productId,
+            product_id: newProductId,
             store_id: storeId,
-            inventory_level:
-              startingStock,
-            units_ordered:
-              unitsOrdered,
-            cost_price: form.cost_price.trim() ? Number(form.cost_price) : undefined,
-            region:
-              form.region,
+            inventory_level: startingStock,
+            units_ordered: unitsOrdered,
+            cost_price: costPrice,
+            region: form.region,
           });
 
         setSuccessMessage(
-          `${
-            result.created
-              ? "Stock record added"
-              : "Stock updated"
-          } for ${
-            result.product_id
-          } at ${
-            result.store_id
-          }.`
+          `New product ${newProductId} — ` +
+          `${createdProduct.name} was added successfully. ` +
+          `Stock record created for ${result.store_id}.`
         );
       }
 
       setFormOpen(false);
       resetMovementFields();
+
       setRefreshKey(
         (key) => key + 1
       );
     } catch (err) {
-      const errorMessage = err instanceof ApiError || err instanceof Error
-        ? err.message
-        : "Could not save this stock record. Please try again.";
+      const errorMessage =
+        err instanceof ApiError ||
+        err instanceof Error
+          ? err.message
+          : "Could not save this stock record. Please try again.";
+
       setFormError(
         movementRecorded
           ? `The stock movement was recorded, but the unit cost could not be saved: ${errorMessage}`
@@ -644,6 +751,10 @@ export default function Inventory() {
       setSaving(false);
     }
   }
+  
+        
+       
+       
 
   // -------------------------------------------------------------------------
   // Inventory filtering
@@ -1000,119 +1111,85 @@ export default function Inventory() {
             </div>
 
             {/* Product and store */}
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="space-y-1 text-sm font-medium text-gray-700">
-                Product
+            <div className="space-y-3">
+              <p className="text-sm font-medium text-gray-700">
+                Product & store
+              </p>
 
-                <select
-                  required
-                  value={
-                    form.product_id
-                  }
-                  disabled={
-                    productsLoading
-                  }
-                  onChange={(
-                    event
-                  ) =>
-                    setForm({
-                      ...form,
-                      product_id:
-                        event
-                          .target
-                          .value,
-                    })
-                  }
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal disabled:bg-gray-100"
-                >
-                  <option
-                    value=""
-                    disabled
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="space-y-1.5 text-sm font-medium text-gray-700">
+                  Product Name
+                  <input
+                    id="product-name"
+                    type="text"
+                    value={form.product_name}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        product_name: event.target.value,
+                      }))
+                    }
+                    placeholder="e.g. Wireless Keyboard"
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                  />
+                </label>
+
+                <label className="space-y-1.5 text-sm font-medium text-gray-700">
+                  SKU
+                  <input
+                    id="product-sku"
+                    type="text"
+                    value={form.sku}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        sku: event.target.value,
+                      }))
+                    }
+                    placeholder="e.g. WK-021"
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                  />
+                </label>
+
+                <label className="space-y-1.5 text-sm font-medium text-gray-700">
+                  Category
+                  <select
+                    id="product-category"
+                    value={form.category}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        category: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
                   >
-                    {productsLoading
-                      ? "Loading products..."
-                      : "Select a product"}
-                  </option>
+                    <option value="">Select a category</option>
+                    <option value="Electronics">Electronics</option>
+                    <option value="Clothing">Clothing</option>
+                    <option value="Furniture">Furniture</option>
+                    <option value="Toys">Toys</option>
+                    <option value="Groceries">Groceries</option>
+                  </select>
+                </label>
 
-                  {(
-                    productsData?.products ??
-                    []
-                  ).map(
-                    (
-                      product
-                    ) => (
-                      <option
-                        key={
-                          product.product_id
-                        }
-                        value={
-                          product.product_id
-                        }
-                      >
-                        {
-                          product.product_id
-                        }{" "}
-                        —{" "}
-                        {
-                          product.name
-                        }{" "}
-                        (
-                        {
-                          product.sku
-                        }
-                        )
-                      </option>
-                    )
-                  )}
-                </select>
-
-                {form.product_id &&
-                  productMap.has(
-                    form.product_id
-                  ) && (
-                    <span className="block text-xs font-normal text-gray-500">
-                      Category:{" "}
-                      {
-                        productMap.get(
-                          form.product_id
-                        )
-                          ?.category
-                      }
-                    </span>
-                  )}
-
-                {productsError && (
-                  <span className="block text-xs font-normal text-red-600">
-                    Could not load the product
-                    catalog.
-                  </span>
-                )}
-              </label>
-
-              <label className="space-y-1 text-sm font-medium text-gray-700">
-                Store ID
-
-                <input
-                  required
-                  maxLength={20}
-                  value={
-                    form.store_id
-                  }
-                  onChange={(
-                    event
-                  ) =>
-                    setForm({
-                      ...form,
-                      store_id:
-                        event
-                          .target
-                          .value,
-                    })
-                  }
-                  placeholder="e.g. S0001"
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                />
-              </label>
+                <label className="space-y-1.5 text-sm font-medium text-gray-700">
+                  Store ID
+                  <input
+                    required
+                    maxLength={20}
+                    value={form.store_id}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        store_id: event.target.value,
+                      }))
+                    }
+                    placeholder="e.g. S0001"
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                  />
+                </label>
+              </div>
             </div>
 
             {/* ------------------------------------------------------------ */}

@@ -44,3 +44,10 @@ class ProductCostsResponse(BaseModel):
 
 class ProductCostUpdateRequest(BaseModel):
     cost_price: float = Field(ge=0)
+
+class ProductCreateRequest(BaseModel):
+    product_id: str | None = None
+    name: str = Field(min_length=1, max_length=100)
+    sku: str = Field(min_length=1, max_length=50)
+    category: str = Field(min_length=1, max_length=50)
+    cost_price: float | None = Field(default=None, ge=0)
