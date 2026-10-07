@@ -271,7 +271,7 @@ def bulk_import_sales(payload: BulkImportRequest, db: Session = Depends(get_db))
 @router.get("/sources", response_model=SalesSourcesSummaryResponse)
 def sales_sources_summary(db: Session = Depends(get_db)):
     """Breakdown of total sales between sample data and genuine real sales."""
-    return sales_service.get_sales_sources_summary(db)
+    return sales_repository.get_sales_sources_summary(db)
 @router.get(
     "/stock-movements",
     response_model=list[StockMovementResponse],

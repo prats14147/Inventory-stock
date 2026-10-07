@@ -1,8 +1,3 @@
-// frontend/src/services/api.ts
-//
-// Single dedicated API service layer (spec section 44) -- components
-// never call fetch() directly, they call functions exported here.
-
 import type {
   CurrentInventoryRow,
   LowStockResponse,
@@ -24,7 +19,13 @@ import type {
 import type { ForecastResponse } from "../types/forecast";
 import type { StockoutRiskResponse } from "../types/stockout";
 import type { ReorderResponse } from "../types/reorder";
-import type { ProductCostRow, ProductCostsResponse, ProductDetailResponse, ProductListResponse, ProductSummary} from "../types/product";
+import type {
+  ProductCostRow,
+  ProductCostsResponse,
+  ProductDetailResponse,
+  ProductListResponse,
+  ProductSummary,
+} from "../types/product";
 import type { ChatResponse } from "../types/chat";
 import type { ChatSessionHistory, ChatSessionInfo } from "../types/chat";
 import type { LiveSalesEvent, LiveSummary, SimulatorStatus, StockoutAlert } from "../types/live";
@@ -89,11 +90,23 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const signIn = (username: string, password: string) =>
-  request<{ access_token: string; token_type: string; expires_in: number }>("/api/auth/login", {
+export const signIn = async (username: string, password: string) => {
+  const result = await request<{
+    access_token: string;
+    token_type: string;
+    expires_in: number;
+  }>("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({
+      username,
+      password,
+    }),
   });
+
+  setAccessToken(result.access_token);
+
+  return result;
+};
 
 export const getCurrentUser = () => request<{ username: string }>("/api/auth/me");
 

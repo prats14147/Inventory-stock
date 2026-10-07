@@ -1,24 +1,54 @@
 // frontend/src/pages/Forecast.tsx
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  BarChart,
-  Bar,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
 } from "recharts";
 
 import { useApi } from "../hooks/useApi";
-import { getForecast, getProducts } from "../services/api";
+import {
+  getForecast,
+  getProducts,
+  getSalesTrend,
+} from "../services/api";
 import { LoadingState, ErrorState } from "../components/LoadingError";
 import PageHeader from "../components/PageHeader";
 import Card from "../components/Card";
 import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
+
+const HISTORY_POINTS = 30;
+
+interface ForecastChartRow {
+  date: string;
+  label: string;
+  historical_units: number | null;
+  forecast_units: number | null;
+  forecast7_units: number | null;
+  forecast14_units: number | null;
+  isForecast: boolean;
+}
+
+function formatDateLabel(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
 
 export default function Forecast() {
   const products = useApi(() => getProducts(), []);
@@ -29,8 +59,6 @@ export default function Forecast() {
   const [productId, setProductId] = useState(linkedProduct);
   const [horizon, setHorizon] = useState(14);
 
-  // A chat answer card can deep-link here (?product=P0001).
-  // Adopt it once the product list has loaded and the id is real.
   useEffect(() => {
     if (
       linkedProduct &&
@@ -43,19 +71,111 @@ export default function Forecast() {
     }
   }, [linkedProduct, productId, products.data]);
 
-  const forecast = useApi(
+  // Fetch both supported model horizons so the graph can show
+  // the 7-day and 14-day outputs together.
+  const forecast7 = useApi(
     () =>
       productId
-        ? getForecast(productId, horizon)
+        ? getForecast(productId, 7)
         : Promise.resolve(null),
-    [productId, horizon]
+    [productId]
   );
+
+  const forecast14 = useApi(
+    () =>
+      productId
+        ? getForecast(productId, 14)
+        : Promise.resolve(null),
+    [productId]
+  );
+
+  // Historical demand is filtered to the synthetic dataset so the
+  // chart uses the same data source as the forecasting models.
+  const history = useApi(
+    () =>
+      productId
+        ? getSalesTrend({
+            granularity: "daily",
+            product_id: productId,
+            source: "Sample Data",
+          })
+        : Promise.resolve(null),
+    [productId]
+  );
+
+  const selectedForecast =
+    horizon === 7 ? forecast7.data : forecast14.data;
+
+  const forecastError =
+    forecast7.error ?? forecast14.error ?? history.error;
+
+  const forecastLoading = Boolean(
+    forecast7.loading ||
+      forecast14.loading ||
+      history.loading
+  );
+
+  const chartData = useMemo(() => {
+    const historicalPoints =
+      history.data?.points ?? [];
+
+    const recentHistory = historicalPoints.slice(
+      -HISTORY_POINTS
+    );
+
+    if (recentHistory.length === 0) {
+      return [];
+    }
+
+    const rows: ForecastChartRow[] = recentHistory.map((point) => ({
+      date: point.period,
+      label: formatDateLabel(point.period),
+      historical_units: point.total_units_sold,
+      forecast_units: null as number | null,
+      forecast7_units: null as number | null,
+      forecast14_units: null as number | null,
+      isForecast: false,
+    }));
+
+    const latestHistorical = rows[rows.length - 1];
+
+    // Use the latest observed value as the visual anchor for the dashed
+    // forecast segment. It is NOT a model prediction.
+    latestHistorical.forecast_units =
+      latestHistorical.historical_units;
+
+    if (forecast7.data) {
+      rows.push({
+        date: forecast7.data.target_date,
+        label: formatDateLabel(forecast7.data.target_date),
+        historical_units: null,
+        forecast_units: forecast7.data.forecast_total_units,
+        forecast7_units: forecast7.data.forecast_total_units,
+        forecast14_units: null,
+        isForecast: true,
+      });
+    }
+
+    if (forecast14.data) {
+      rows.push({
+        date: forecast14.data.target_date,
+        label: formatDateLabel(forecast14.data.target_date),
+        historical_units: null,
+        forecast_units: forecast14.data.forecast_total_units,
+        forecast7_units: null,
+        forecast14_units: forecast14.data.forecast_total_units,
+        isForecast: true,
+      });
+    }
+
+    return rows;
+  }, [history.data, forecast7.data, forecast14.data]);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Demand Forecast"
-        subtitle="XGBoost forecast per product, broken down by store. Pick a product to see expected demand."
+        subtitle="XGBoost demand forecast for 7-day and 14-day horizons, shown against recent historical demand."
       />
 
       <div
@@ -89,26 +209,17 @@ export default function Forecast() {
 
             <p className="leading-relaxed text-amber-800">
               Demand forecasts are generated using an XGBoost model trained
-              strictly on the{" "}
-              <strong>synthetic sample dataset (2022–2024)</strong>.
-              According to project documentation, this model outperforms its
-              naive 7-day moving average baseline by only{" "}
-              <strong>approximately 5%</strong> (MAE ~88.5 vs baseline ~93.4)
-              with high sMAPE (~72–74%), due to weak price/promotion signals
-              in the synthetic generating process.
+              strictly on the <strong>synthetic sample dataset (2022–2024)</strong>.
+              The model improves on the naive 7-day moving-average baseline by
+              only approximately 5%, with high sMAPE, so the forecast should be
+              treated as decision support rather than a guarantee.
             </p>
 
             <p className="text-xs text-amber-700">
-              <strong>Data Isolation:</strong> Genuine sales entered manually (
-              <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-amber-900">
-                Real · Manual
-              </code>
-              ) or imported via CSV (
-              <code className="rounded bg-amber-100 px-1 py-0.5 font-mono text-amber-900">
-                Real · CSV Import
-              </code>
-              ) are stored separately and are not mixed into this synthetic
-              pipeline to prevent misleading forecasts.
+              <strong>Data Isolation:</strong> Genuine sales entered manually
+              (Real · Manual) or imported via CSV (Real · CSV Import) are stored
+              separately and are not mixed into this synthetic forecasting
+              pipeline.
             </p>
           </div>
         </div>
@@ -155,55 +266,55 @@ export default function Forecast() {
       {!productId && (
         <EmptyState
           title="Select a product to see its demand forecast."
-          hint="Forecasts come from the trained XGBoost model — try P0001 or any product you asked the chatbot about."
+          hint="Forecasts come from the trained XGBoost models for the 7-day and 14-day horizons."
         />
       )}
 
-      {productId && forecast.loading && (
+      {productId && forecastLoading && (
         <LoadingState label="Forecasting..." />
       )}
 
-      {productId && forecast.error && (
-        <ErrorState message={forecast.error} />
+      {productId && forecastError && !forecastLoading && (
+        <ErrorState message={forecastError} />
       )}
 
-      {forecast.data && (
+      {selectedForecast && !forecastLoading && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
-              label="Total forecast demand"
-              value={`${forecast.data.forecast_total_units.toFixed(0)} units`}
-              hint={`by ${forecast.data.target_date}`}
+              label="Forecast demand at target date"
+              value={`${selectedForecast.forecast_total_units.toFixed(0)} units`}
+              hint={`Target date: ${selectedForecast.target_date}`}
               accent="info"
             />
 
             <StatCard
               label="Data source"
               value="Synthetic 2022-2024"
-              hint="Pure sample dataset (Real sales excluded)"
+              hint="Real sales are excluded from this model"
               accent="warning"
             />
 
             <StatCard
               label="Model test MAE"
-              value={forecast.data.model_test_mae.toFixed(1)}
-              hint={`Outperforms baseline by ~${
-                forecast.data.baseline_improvement_pct ?? 5
+              value={selectedForecast.model_test_mae.toFixed(1)}
+              hint={`Improvement over baseline: ~${
+                selectedForecast.baseline_improvement_pct ?? 5
               }%`}
             />
 
             <StatCard
-              label="Model horizon used"
-              value={`${forecast.data.model_horizon_days} days`}
+              label="Selected horizon"
+              value={`${selectedForecast.model_horizon_days} days`}
               hint={
-                forecast.data.model_horizon_days !==
-                forecast.data.requested_horizon_days
-                  ? `Nearest trained model (requested ${forecast.data.requested_horizon_days} days)`
+                selectedForecast.model_horizon_days !==
+                selectedForecast.requested_horizon_days
+                  ? `Nearest trained model (requested ${selectedForecast.requested_horizon_days} days)`
                   : "Matches your request"
               }
               accent={
-                forecast.data.model_horizon_days !==
-                forecast.data.requested_horizon_days
+                selectedForecast.model_horizon_days !==
+                selectedForecast.requested_horizon_days
                   ? "warning"
                   : "default"
               }
@@ -211,48 +322,132 @@ export default function Forecast() {
           </div>
 
           <Card
-            title="Forecast by Store"
-            subtitle={`Expected demand for ${forecast.data.product_id}`}
+            title="Historical Demand & Forecast"
+            subtitle={`Recent daily demand for ${selectedForecast.product_id} with the model's 7-day and 14-day forecast points`}
           >
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={forecast.data.per_store}>
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="#e5e7eb"
-                />
+            {chartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={360}>
+                <LineChart
+                  data={chartData}
+                  margin={{
+                    top: 10,
+                    right: 20,
+                    left: 10,
+                    bottom: 10,
+                  }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="#e5e7eb"
+                  />
 
-                <XAxis
-                  dataKey="store_id"
-                  fontSize={12}
-                  tickLine={false}
-                  axisLine={{ stroke: "#e5e7eb" }}
-                />
+                  <XAxis
+                    dataKey="label"
+                    fontSize={12}
+                    tickLine={false}
+                    axisLine={{ stroke: "#e5e7eb" }}
+                    interval="preserveStartEnd"
+                  />
 
-                <YAxis
-                  fontSize={12}
-                  tickLine={false}
-                  axisLine={false}
-                  tickFormatter={(v: number) =>
-                    v.toLocaleString()
-                  }
-                />
+                  <YAxis
+                    fontSize={12}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(value: number) =>
+                      value.toLocaleString()
+                    }
+                  />
 
-                <Tooltip
-                  formatter={(v) => [
-                    `${Number(v).toLocaleString()} units`,
-                    "Forecast",
-                  ]}
-                  cursor={{ fill: "#eff6ff" }}
-                />
+                  <Tooltip
+                    labelFormatter={(_label, payload) => {
+                      const item = payload?.[0]?.payload as
+                        | {
+                            date?: string;
+                            isForecast?: boolean;
+                          }
+                        | undefined;
 
-                <Bar
-                  dataKey="forecast_units"
-                  fill="#2563eb"
-                  radius={[6, 6, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
+                      if (!item?.date) {
+                        return "";
+                      }
+
+                      return `${item.isForecast ? "Forecast date" : "Date"}: ${item.date}`;
+                    }}
+                    formatter={(value, name) => {
+                      if (value === null || value === undefined) {
+                        return ["—", String(name)];
+                      }
+
+                      return [
+                        `${Number(value).toLocaleString()} units`,
+                        String(name),
+                      ];
+                    }}
+                  />
+
+                  <Legend />
+
+                  <Line
+                    type="monotone"
+                    dataKey="historical_units"
+                    name="Historical demand"
+                    stroke="#2563eb"
+                    strokeWidth={3}
+                    dot={false}
+                    activeDot={{ r: 5 }}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                  />
+
+                  <Line
+                    type="linear"
+                    dataKey="forecast_units"
+                    name="XGBoost forecast"
+                    stroke="#f59e0b"
+                    strokeWidth={3}
+                    strokeDasharray="8 6"
+                    dot={{ r: 6 }}
+                    activeDot={{ r: 8 }}
+                    connectNulls={true}
+                    isAnimationActive={false}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyState
+                title="No historical demand is available for this product."
+                hint="The chart needs the synthetic sales history used by the forecasting models."
+              />
+            )}
+
+            <div className="mt-3 rounded-lg bg-gray-50 px-4 py-3 text-xs leading-relaxed text-gray-600">
+              <strong>How to read this chart:</strong> the solid line is the
+              recent historical daily demand. The dashed line shows the model's
+              direct 7-day and 14-day forecast outputs. The last historical value
+              is used only as a visual anchor for the forecast segment; the model
+              does not generate individual predictions for days 1–6 or 8–13.
+            </div>
           </Card>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {forecast7.data && (
+              <StatCard
+                label="7-day forecast"
+                value={`${forecast7.data.forecast_total_units.toFixed(0)} units`}
+                hint={`Target date: ${forecast7.data.target_date}`}
+                accent={horizon === 7 ? "info" : "default"}
+              />
+            )}
+
+            {forecast14.data && (
+              <StatCard
+                label="14-day forecast"
+                value={`${forecast14.data.forecast_total_units.toFixed(0)} units`}
+                hint={`Target date: ${forecast14.data.target_date}`}
+                accent={horizon === 14 ? "info" : "default"}
+              />
+            )}
+          </div>
         </div>
       )}
     </div>

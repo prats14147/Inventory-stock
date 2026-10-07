@@ -177,6 +177,9 @@ export default function Inventory() {
   const [formOpen, setFormOpen] =
     useState(false);
 
+  const [productMode, setProductMode] =
+    useState<"new" | "existing">("new");
+
   const [saving, setSaving] =
     useState(false);
 
@@ -202,18 +205,17 @@ export default function Inventory() {
   const [originalCostPrice, setOriginalCostPrice] =
     useState("");
 
-    const [form, setForm] = useState({
-      product_id: "",
-      product_name: "",
-      sku: "",
-      category: "",
-      store_id: "",
-      inventory_level: "",
-      units_ordered: "0",
-      cost_price: "",
-      region: "",
-    });
-    
+const [form, setForm] = useState({
+    product_id: "",
+    product_name: "",
+    sku: "",
+    category: "",
+    store_id: "",
+    inventory_level: "",
+    units_ordered: "0",
+    cost_price: "",
+    region: "",
+  });
 
   /*
    * Deep link:
@@ -285,8 +287,8 @@ export default function Inventory() {
 
   const {
     data: productsData,
-    loading: _productsLoading,
-    error: _productsError,
+    loading: productsLoading,
+    error: productsError,
   } = useApi(
     () => getProducts(),
     [refreshKey]
@@ -390,6 +392,7 @@ export default function Inventory() {
   }
 
   function beginAdd() {
+    setProductMode("new");
     setForm({
       product_id: "",
       product_name: "",
@@ -412,8 +415,9 @@ export default function Inventory() {
   function beginEdit(
     row: NonNullable<typeof data>[number]
   ) {
-    const product =
-      productMap.get(row.product_id);
+    setProductMode("existing");
+
+    const product = productMap.get(row.product_id);
 
     setForm({
       product_id: row.product_id,
@@ -421,20 +425,13 @@ export default function Inventory() {
       sku: product?.sku ?? "",
       category: product?.category ?? row.category,
       store_id: row.store_id,
-      inventory_level:
-        String(row.inventory_level),
-      units_ordered:
-        String(row.units_ordered),
+      inventory_level: String(row.inventory_level),
+      units_ordered: String(row.units_ordered),
       cost_price:
         costByProduct.get(row.product_id) == null
           ? ""
-          : String(
-              costByProduct.get(row.product_id)
-            ),
-      region:
-        REGIONS.includes(row.region)
-          ? row.region
-          : "",
+          : String(costByProduct.get(row.product_id)),
+      region: REGIONS.includes(row.region) ? row.region : "",
     });
 
     resetMovementFields();
@@ -442,9 +439,7 @@ export default function Inventory() {
     setOriginalCostPrice(
       costByProduct.get(row.product_id) == null
         ? ""
-        : String(
-            costByProduct.get(row.product_id)
-          )
+        : String(costByProduct.get(row.product_id))
     );
 
     setFormError("");
@@ -457,6 +452,10 @@ export default function Inventory() {
   // -------------------------------------------------------------------------
 
   const existingFormRow = useMemo(() => {
+    if (productMode !== "existing") {
+      return undefined;
+    }
+
     const productId = form.product_id.trim();
     const storeId = form.store_id.trim();
 
@@ -473,6 +472,7 @@ export default function Inventory() {
     data,
     form.product_id,
     form.store_id,
+    productMode,
   ]);
 
   // -------------------------------------------------------------------------
@@ -492,24 +492,111 @@ export default function Inventory() {
 
     try {
       const productId = form.product_id.trim();
-      const productName = form.product_name.trim();
-      const sku = form.sku.trim();
-      const category = form.category.trim();
       const storeId = form.store_id.trim();
 
-      // ---------------------------------------------------------------
-      // Existing product/store = record a stock movement
-      // ---------------------------------------------------------------
+      if (!productId) {
+        throw new Error(
+          productMode === "new"
+            ? "Please enter a Product ID."
+            : "Please select a product."
+        );
+      }
 
-      if (existingFormRow) {
+      if (!storeId) {
+        throw new Error("Please enter a Store ID.");
+      }
+
+      // ---------------------------------------------------------------
+      // Create a brand-new catalog product and its first inventory row.
+      // ---------------------------------------------------------------
+      if (productMode === "new") {
+        const productName = form.product_name.trim();
+        const sku = form.sku.trim();
+        const categoryValue = form.category.trim();
+
+        if (!productName) {
+          throw new Error("Please enter a product name.");
+        }
+
+        if (!sku) {
+          throw new Error("Please enter an SKU.");
+        }
+
+        if (!categoryValue) {
+          throw new Error("Please enter a product category.");
+        }
+
+        if (!form.inventory_level.trim()) {
+          throw new Error("Please enter the starting stock.");
+        }
+
+        if (!form.region) {
+          throw new Error("Please select a region.");
+        }
+
+        const startingStock = Number(form.inventory_level);
+        const unitsOrdered = Number(form.units_ordered);
+        const parsedCost = form.cost_price.trim()
+          ? Number(form.cost_price)
+          : undefined;
+
+        if (
+          !Number.isInteger(startingStock) ||
+          startingStock < 0
+        ) {
+          throw new Error(
+            "Starting stock must be a whole number of 0 or more."
+          );
+        }
+
+        if (
+          !Number.isInteger(unitsOrdered) ||
+          unitsOrdered < 0
+        ) {
+          throw new Error(
+            "Units ordered must be a whole number of 0 or more."
+          );
+        }
+
+        if (
+          parsedCost !== undefined &&
+          (!Number.isFinite(parsedCost) || parsedCost < 0)
+        ) {
+          throw new Error("Unit cost must be zero or greater.");
+        }
+
+        const createdProduct = await createProduct({
+          product_id: productId,
+          name: productName,
+          sku,
+          category: categoryValue,
+          cost_price: parsedCost,
+        });
+
+        const result = await saveInventory({
+          product_id: createdProduct.product_id,
+          store_id: storeId,
+          inventory_level: startingStock,
+          units_ordered: unitsOrdered,
+          cost_price: parsedCost,
+          region: form.region,
+        });
+
+        setSuccessMessage(
+          `New product ${createdProduct.product_id} — ` +
+          `${createdProduct.name} was added successfully. ` +
+          `Stock record created for ${result.store_id}.`
+        );
+      }
+      // ---------------------------------------------------------------
+      // Existing catalog product.
+      // ---------------------------------------------------------------
+      else if (existingFormRow) {
         const costChanged =
           form.cost_price.trim() !== originalCostPrice;
-
         const hasMovement =
           quantityDelta.trim() !== "";
-
-        const delta =
-          Number(quantityDelta);
+        const delta = Number(quantityDelta);
 
         if (!hasMovement && !costChanged) {
           throw new Error(
@@ -519,10 +606,7 @@ export default function Inventory() {
 
         if (
           hasMovement &&
-          (
-            !Number.isInteger(delta) ||
-            delta === 0
-          )
+          (!Number.isInteger(delta) || delta === 0)
         ) {
           throw new Error(
             "Quantity change must be a non-zero whole number."
@@ -531,10 +615,8 @@ export default function Inventory() {
 
         if (
           hasMovement &&
-          (
-            movementType === "DELIVERY" ||
-            movementType === "RETURN"
-          ) &&
+          (movementType === "DELIVERY" ||
+            movementType === "RETURN") &&
           delta <= 0
         ) {
           throw new Error(
@@ -551,28 +633,19 @@ export default function Inventory() {
           );
         }
 
-        if (
-          costChanged &&
-          !form.cost_price.trim()
-        ) {
+        if (costChanged && !form.cost_price.trim()) {
           throw new Error(
             "Enter a unit cost. To remove a saved cost, set it to 0."
           );
         }
 
-        const parsedCost =
-          Number(form.cost_price);
+        const parsedCost = Number(form.cost_price);
 
         if (
           costChanged &&
-          (
-            !Number.isFinite(parsedCost) ||
-            parsedCost < 0
-          )
+          (!Number.isFinite(parsedCost) || parsedCost < 0)
         ) {
-          throw new Error(
-            "Unit cost must be zero or greater."
-          );
+          throw new Error("Unit cost must be zero or greater.");
         }
 
         let movementMessage = "";
@@ -595,14 +668,8 @@ export default function Inventory() {
         }
 
         if (costChanged) {
-          await updateProductCost(
-            productId,
-            parsedCost
-          );
-
-          setOriginalCostPrice(
-            form.cost_price.trim()
-          );
+          await updateProductCost(productId, parsedCost);
+          setOriginalCostPrice(form.cost_price.trim());
         }
 
         setSuccessMessage(
@@ -615,52 +682,24 @@ export default function Inventory() {
             .filter(Boolean)
             .join(" ")
         );
-      } else {
-        // ---------------------------------------------------------------
-        // New product/store = create product + starting inventory
-        // ---------------------------------------------------------------
-
-        if (!productName) {
-          throw new Error(
-            "Please enter a product name."
-          );
-        }
-
-        if (!sku) {
-          throw new Error(
-            "Please enter an SKU."
-          );
-        }
-
-        if (!category) {
-          throw new Error(
-            "Please select a category."
-          );
-        }
-
-        if (!storeId) {
-          throw new Error(
-            "Please enter a Store ID."
-          );
-        }
-
+      }
+      // ---------------------------------------------------------------
+      // Existing catalog product with no inventory row at this store.
+      // ---------------------------------------------------------------
+      else {
         if (!form.inventory_level.trim()) {
-          throw new Error(
-            "Please enter the starting stock."
-          );
+          throw new Error("Please enter the starting stock.");
         }
 
         if (!form.region) {
-          throw new Error(
-            "Please select a region."
-          );
+          throw new Error("Please select a region.");
         }
 
-        const startingStock =
-          Number(form.inventory_level);
-
-        const unitsOrdered =
-          Number(form.units_ordered);
+        const startingStock = Number(form.inventory_level);
+        const unitsOrdered = Number(form.units_ordered);
+        const parsedCost = form.cost_price.trim()
+          ? Number(form.cost_price)
+          : undefined;
 
         if (
           !Number.isInteger(startingStock) ||
@@ -680,65 +719,34 @@ export default function Inventory() {
           );
         }
 
-        const costPrice =
-          form.cost_price.trim()
-            ? Number(form.cost_price)
-            : undefined;
-
         if (
-          costPrice !== undefined &&
-          (
-            !Number.isFinite(costPrice) ||
-            costPrice < 0
-          )
+          parsedCost !== undefined &&
+          (!Number.isFinite(parsedCost) || parsedCost < 0)
         ) {
-          throw new Error(
-            "Unit cost must be zero or greater."
-          );
+          throw new Error("Unit cost must be zero or greater.");
         }
 
-        // Create the new product in the catalog.
-        // The backend automatically generates the next Product ID,
-        // for example P0021, P0022, P0023, etc.
-        const createdProduct =
-          await createProduct({
-            name: productName,
-            sku,
-            category,
-            cost_price: costPrice,
-          });
-
-        // Use the newly generated Product ID when creating inventory.
-        const newProductId =
-          createdProduct.product_id;
-
-        const result =
-          await saveInventory({
-            product_id: newProductId,
-            store_id: storeId,
-            inventory_level: startingStock,
-            units_ordered: unitsOrdered,
-            cost_price: costPrice,
-            region: form.region,
-          });
+        const result = await saveInventory({
+          product_id: productId,
+          store_id: storeId,
+          inventory_level: startingStock,
+          units_ordered: unitsOrdered,
+          cost_price: parsedCost,
+          region: form.region,
+        });
 
         setSuccessMessage(
-          `New product ${newProductId} — ` +
-          `${createdProduct.name} was added successfully. ` +
-          `Stock record created for ${result.store_id}.`
+          `Stock record ${result.created ? "added" : "updated"} ` +
+          `for ${result.product_id} at ${result.store_id}.`
         );
       }
 
       setFormOpen(false);
       resetMovementFields();
-
-      setRefreshKey(
-        (key) => key + 1
-      );
+      setRefreshKey((key) => key + 1);
     } catch (err) {
       const errorMessage =
-        err instanceof ApiError ||
-        err instanceof Error
+        err instanceof ApiError || err instanceof Error
           ? err.message
           : "Could not save this stock record. Please try again.";
 
@@ -751,10 +759,6 @@ export default function Inventory() {
       setSaving(false);
     }
   }
-  
-        
-       
-       
 
   // -------------------------------------------------------------------------
   // Inventory filtering
@@ -1098,154 +1102,265 @@ export default function Inventory() {
           >
             <div>
               <h2 className="text-base font-semibold text-gray-900">
-                {existingFormRow
+                {productMode === "new"
+                  ? "Create new product / stock"
+                  : existingFormRow
                   ? "Record stock movement"
-                  : "Add new product / stock"}
+                  : "Add stock for existing product"}
               </h2>
 
               <p className="mt-1 text-sm text-gray-500">
-                {existingFormRow
-                  ? "This product already exists. Choose the type of stock movement, enter the quantity change, and explain why the stock changed."
-                  : "Select a product from the catalog and enter its starting stock and store information."}
+                {productMode === "new"
+                  ? "Enter the product details yourself, then add its initial stock for a store."
+                  : existingFormRow
+                  ? "This product already exists at this store. Choose the type of stock movement, enter the quantity change, and explain why the stock changed."
+                  : "Select an existing catalog product and add inventory for a store."}
               </p>
             </div>
 
-            {/* Product and store */}
-            <div className="space-y-3">
-              <p className="text-sm font-medium text-gray-700">
-                Product & store
-              </p>
+{/* Product mode + product/store fields */}
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <div className="mb-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProductMode("new");
+                    setForm({
+                      product_id: "",
+                      product_name: "",
+                      sku: "",
+                      category: "",
+                      store_id: "",
+                      inventory_level: "",
+                      units_ordered: "0",
+                      cost_price: "",
+                      region: "",
+                    });
+                    setOriginalCostPrice("");
+                    resetMovementFields();
+                    setFormError("");
+                  }}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${
+                    productMode === "new"
+                      ? "bg-brand-600 text-white"
+                      : "border border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
+                  }`}
+                >
+                  Create new product
+                </button>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <label className="space-y-1.5 text-sm font-medium text-gray-700">
-                  Product Name
-                  <input
-                    id="product-name"
-                    type="text"
-                    value={form.product_name}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        product_name: event.target.value,
-                      }))
-                    }
-                    placeholder="e.g. Wireless Keyboard"
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-                  />
-                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProductMode("existing");
+                    setForm({
+                      product_id: "",
+                      product_name: "",
+                      sku: "",
+                      category: "",
+                      store_id: "",
+                      inventory_level: "",
+                      units_ordered: "0",
+                      cost_price: "",
+                      region: "",
+                    });
+                    setOriginalCostPrice("");
+                    resetMovementFields();
+                    setFormError("");
+                  }}
+                  className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${
+                    productMode === "existing"
+                      ? "bg-brand-600 text-white"
+                      : "border border-gray-300 bg-white text-gray-700 hover:bg-gray-100"
+                  }`}
+                >
+                  Use existing product
+                </button>
+              </div>
 
-                <label className="space-y-1.5 text-sm font-medium text-gray-700">
-                  SKU
-                  <input
-                    id="product-sku"
-                    type="text"
-                    value={form.sku}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        sku: event.target.value,
-                      }))
-                    }
-                    placeholder="e.g. WK-021"
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-                  />
-                </label>
+              {productMode === "new" ? (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <label className="space-y-1 text-sm font-medium text-gray-700">
+                    Product ID
+                    <input
+                      required
+                      maxLength={20}
+                      value={form.product_id}
+                      onChange={(event) =>
+                        setForm({
+                          ...form,
+                          product_id: event.target.value.toUpperCase(),
+                        })
+                      }
+                      placeholder="e.g. P0021"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                    />
+                  </label>
 
-                <label className="space-y-1.5 text-sm font-medium text-gray-700">
-                  Category
+                  <label className="space-y-1 text-sm font-medium text-gray-700 sm:col-span-2">
+                    Product Name
+                    <input
+                      required
+                      maxLength={100}
+                      value={form.product_name}
+                      onChange={(event) =>
+                        setForm({
+                          ...form,
+                          product_name: event.target.value,
+                        })
+                      }
+                      placeholder="e.g. Wireless Keyboard"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                    />
+                  </label>
+
+                  <label className="space-y-1 text-sm font-medium text-gray-700">
+                    SKU
+                    <input
+                      required
+                      maxLength={50}
+                      value={form.sku}
+                      onChange={(event) =>
+                        setForm({
+                          ...form,
+                          sku: event.target.value.toUpperCase(),
+                        })
+                      }
+                      placeholder="e.g. WK-021"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                    />
+                  </label>
+
+                  <label className="space-y-1 text-sm font-medium text-gray-700">
+                    Category
+                    <input
+                      required
+                      maxLength={50}
+                      value={form.category}
+                      onChange={(event) =>
+                        setForm({
+                          ...form,
+                          category: event.target.value,
+                        })
+                      }
+                      placeholder="e.g. Electronics"
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                    />
+                    <span className="block text-xs font-normal text-gray-500">
+                      Enter any category you need.
+                    </span>
+                  </label>
+                </div>
+              ) : (
+                <label className="block max-w-xl space-y-1 text-sm font-medium text-gray-700">
+                  Existing Product
                   <select
-                    id="product-category"
-                    value={form.category}
+                    required
+                    value={form.product_id}
+                    disabled={productsLoading}
                     onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        category: event.target.value,
-                      }))
+                      setForm({
+                        ...form,
+                        product_id: event.target.value,
+                      })
                     }
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal disabled:bg-gray-100"
                   >
-                    <option value="">Select a category</option>
-                    <option value="Electronics">Electronics</option>
-                    <option value="Clothing">Clothing</option>
-                    <option value="Furniture">Furniture</option>
-                    <option value="Toys">Toys</option>
-                    <option value="Groceries">Groceries</option>
-                  </select>
-                </label>
+                    <option value="">
+                      {productsLoading
+                        ? "Loading products..."
+                        : "Select a product"}
+                    </option>
 
-                <label className="space-y-1.5 text-sm font-medium text-gray-700">
+                    {(productsData?.products ?? []).map((product) => (
+                      <option
+                        key={product.product_id}
+                        value={product.product_id}
+                      >
+                        {product.product_id} — {product.name} ({product.sku})
+                      </option>
+                    ))}
+                  </select>
+
+                  {form.product_id && productMap.has(form.product_id) && (
+                    <span className="block text-xs font-normal text-gray-500">
+                      Category: {productMap.get(form.product_id)?.category}
+                    </span>
+                  )}
+
+                  {productsError && (
+                    <span className="block text-xs font-normal text-red-600">
+                      Could not load the product catalog. Refresh the page or check the backend.
+                    </span>
+                  )}
+                </label>
+              )}
+
+              <div className="mt-3">
+                <label className="block max-w-xl space-y-1 text-sm font-medium text-gray-700">
                   Store ID
                   <input
                     required
                     maxLength={20}
                     value={form.store_id}
                     onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        store_id: event.target.value,
-                      }))
+                      setForm({
+                        ...form,
+                        store_id: event.target.value.toUpperCase(),
+                      })
                     }
                     placeholder="e.g. S0001"
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
                   />
                 </label>
               </div>
             </div>
-
             {/* ------------------------------------------------------------ */}
             {/* New product fields                                            */}
             {/* ------------------------------------------------------------ */}
 
-            {!existingFormRow && (
+            {(productMode === "new" || (productMode === "existing" && !existingFormRow)) && (
               <>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  <label className="space-y-1 text-sm font-medium text-gray-700">
-                    Starting Stock
+                {productMode === "existing" && (
+                  <p className="text-sm text-gray-500">
+                    This existing catalog product does not have inventory at this store yet. Enter its starting stock below.
+                  </p>
+                )}
 
-                    <input
-                      required
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={
-                        form.inventory_level
-                      }
-                      onChange={(
-                        event
-                      ) =>
-                        setForm({
-                          ...form,
-                          inventory_level:
-                            event
-                              .target
-                              .value,
-                        })
-                      }
-                      placeholder="e.g. 100"
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                    />
-                  </label>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {(productMode === "new" || !existingFormRow) && (
+                    <label className="space-y-1 text-sm font-medium text-gray-700">
+                      Starting Stock
+                      <input
+                        required
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={form.inventory_level}
+                        onChange={(event) =>
+                          setForm({
+                            ...form,
+                            inventory_level: event.target.value,
+                          })
+                        }
+                        placeholder="e.g. 100"
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                      />
+                    </label>
+                  )}
 
                   <label className="space-y-1 text-sm font-medium text-gray-700">
                     Units Ordered
-
                     <input
                       required
                       type="number"
                       min="0"
                       step="1"
-                      value={
-                        form.units_ordered
-                      }
-                      onChange={(
-                        event
-                      ) =>
+                      value={form.units_ordered}
+                      onChange={(event) =>
                         setForm({
                           ...form,
-                          units_ordered:
-                            event
-                              .target
-                              .value,
+                          units_ordered: event.target.value,
                         })
                       }
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
@@ -1259,7 +1374,12 @@ export default function Inventory() {
                       min="0"
                       step="0.01"
                       value={form.cost_price}
-                      onChange={(event) => setForm({ ...form, cost_price: event.target.value })}
+                      onChange={(event) =>
+                        setForm({
+                          ...form,
+                          cost_price: event.target.value,
+                        })
+                      }
                       placeholder="e.g. 4.50"
                       className="w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
                     />
@@ -1267,88 +1387,49 @@ export default function Inventory() {
 
                   <label className="space-y-1 text-sm font-medium text-gray-700">
                     Region
-
                     <select
                       required
-                      value={
-                        form.region
-                      }
-                      onChange={(
-                        event
-                      ) =>
+                      value={form.region}
+                      onChange={(event) =>
                         setForm({
                           ...form,
-                          region:
-                            event
-                              .target
-                              .value,
+                          region: event.target.value,
                         })
                       }
                       className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal"
                     >
-                      <option
-                        value=""
-                        disabled
-                      >
+                      <option value="" disabled>
                         Select a region
                       </option>
-
-                      {REGIONS.map(
-                        (
-                          item
-                        ) => (
-                          <option
-                            key={item}
-                            value={item}
-                          >
-                            {item}
-                          </option>
-                        )
-                      )}
+                      {REGIONS.map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
                     </select>
                   </label>
                 </div>
 
-                {form.product_id &&
-                  productMap.has(
-                    form.product_id
-                  ) && (
+                {productMode === "existing" && form.product_id &&
+                  productMap.has(form.product_id) && (
                     <div className="rounded-lg border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-gray-700">
-                      <strong>
-                        Product:
-                      </strong>{" "}
-                      {
-                        form.product_id
-                      }{" "}
-                      —{" "}
-                      {getProductName(
-                        form.product_id
-                      )}{" "}
-                      (
-                      {getProductSku(
-                        form.product_id
-                      )}
-                      )
+                      <strong>Product:</strong>{" "}
+                      {form.product_id} — {getProductName(form.product_id)} ({getProductSku(form.product_id)})
                       <br />
-                      <strong>
-                        Standard category:
-                      </strong>{" "}
-                      {getProductCategory(
-                        form.product_id,
-                        "—"
-                      )}
+                      <strong>Standard category:</strong>{" "}
+                      {getProductCategory(form.product_id, "—")}
                     </div>
                   )}
 
                 <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-600">
                   <strong>
-                    New product stock:
+                    {productMode === "new"
+                      ? "New product:"
+                      : "Existing product:"}
                   </strong>{" "}
-                  Starting stock is the initial quantity
-                  currently available. The product category
-                  comes automatically from the product catalog.
-                  This starting stock does not create a movement
-                  history entry.
+                  {productMode === "new"
+                    ? "The product ID, name, SKU, and category you enter will be added to the product catalog first. Then the starting stock will be created for the selected store."
+                    : "The existing catalog product will get a new store inventory record because no row currently exists for this store."}
                 </div>
               </>
             )}
@@ -1357,7 +1438,7 @@ export default function Inventory() {
             {/* Existing product movement fields                              */}
             {/* ------------------------------------------------------------ */}
 
-            {existingFormRow && (
+            {productMode === "existing" && existingFormRow && (
               <>
                 <div className="rounded-lg border border-brand-100 bg-brand-50 px-4 py-3 text-sm text-gray-700">
                   <strong>
@@ -1540,9 +1621,11 @@ export default function Inventory() {
               >
                 {saving
                   ? "Saving…"
+                  : productMode === "new"
+                  ? "Add product"
                   : existingFormRow
                   ? "Record movement"
-                  : "Add product"}
+                  : "Add stock"}
               </button>
 
               <button

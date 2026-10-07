@@ -96,9 +96,19 @@ async def protect_api(request: Request, call_next):
 # Add CORS after the auth middleware so Starlette places it on the outside.
 # That way even the auth middleware's 401 response includes CORS headers and
 # browsers can report "Sign in" instead of a misleading network failure.
+# In development, Vite may move from 5173 to another local port if
+# 5173 is already in use. Allow local browser origins while keeping
+# production deployments restricted to the configured explicit origins.
+development_origin_regex = (
+    r"https?://(?:localhost|127\\.0\\.0\\.1):\\d+$"
+    if settings.environment.lower() == "development"
+    else None
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=development_origin_regex,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["Authorization", "Content-Type"],
