@@ -67,6 +67,18 @@ def test_demand_forecast_column_not_in_features():
     assert "demand_forecast" not in [c.lower() for c in FEATURE_COLUMNS]
 
 
+def test_training_future_price_features_match_live_carry_forward(cleaned_df):
+    """Training must not use actual future prices unavailable at inference."""
+    sup = build_supervised_frame(cleaned_df, 7)
+    for target, origin in (
+        ("target_price", "origin_price"),
+        ("target_discount", "origin_discount"),
+        ("target_promotion", "origin_promotion"),
+        ("target_competitor_pricing", "origin_competitor_pricing"),
+    ):
+        assert np.array_equal(sup[target].to_numpy(), sup[origin].to_numpy())
+
+
 def test_predictions_are_non_negative(cleaned_df):
     model = joblib.load(ARTIFACTS_DIR / "forecast_model_h14.joblib")
     sup = build_supervised_frame(cleaned_df, 14)

@@ -16,6 +16,9 @@ from app.repositories import inventory_repository, sales_repository
 from app.schemas.sales import (
     BulkImportRequest,
     BulkImportResponse,
+    CloseSalesDayRequest,
+    CloseSalesDayResponse,
+    SalesDayCoverageResponse,
     CategorySalesSummary,
     CsvRowError,
     DailySaleRow,
@@ -33,6 +36,18 @@ from app.services.stockout_service import clear_risk_cache
 
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
+
+
+@router.post("/close-day", response_model=CloseSalesDayResponse)
+def close_sales_day(payload: CloseSalesDayRequest, db: Session = Depends(get_db)):
+    """Confirm that all sales for a store and business date have been entered."""
+    return sales_service.close_sales_day(db, payload)
+
+
+@router.get("/day-coverage", response_model=SalesDayCoverageResponse)
+def sales_day_coverage(db: Session = Depends(get_db)):
+    """Show how many verified complete sales days are available per store."""
+    return sales_service.get_sales_day_coverage(db)
 
 
 @router.post("/record", response_model=RecordSaleResponse)

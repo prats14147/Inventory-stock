@@ -37,11 +37,10 @@ their respective phases.
   from T or later relative to the target.
 - Target-date (T+h) calendar features (day of week, month, week of year,
   weekend) are always legitimately knowable in advance.
-- Target-date `Price`, `Discount`, `Holiday/Promotion`, and `Competitor
-  Pricing` are used **under the assumption that pricing/promotion
-  calendars are planned ahead of the forecast horizon** -- standard
-  retail-forecasting practice, but an assumption, not a fact verified in
-  this data.
+- The sample does not provide a planned future price/promotion calendar.
+  Training, validation, test, and live inference therefore carry forward
+  the latest known `Price`, `Discount`, `Holiday/Promotion`, and `Competitor
+  Pricing` values. Actual future-row values are not used as model inputs.
 - `Inventory Level` uses **only the origin-date (T) value** -- the
   target-date value depends on events between T and T+h that aren't
   knowable at forecast time, so using it would be leakage.
@@ -88,12 +87,12 @@ plainly to any reader of the forecasting results, not glossed over.
   applying it silently.
 - **Lead-time demand approximation.** The trained forecasting models
   (Phase 5) predict a single day's demand at a specific horizon (7 or 14
-  days ahead), not a cumulative sum over an arbitrary window. Total
-  demand over the lead-time window is approximated as
-  `forecast_daily_rate * lead_time_days`, where `forecast_daily_rate` is
-  the model's predicted total for the nearest trained horizon divided by
-  that horizon. This assumes a near-constant daily demand rate across the
-  window -- a simplification, not a per-day recursive forecast.
+  days ahead), not a cumulative sum over an arbitrary window. The model's
+  product-wide prediction for the target date is already a daily rate, so
+  total lead-time demand is approximated as
+  `forecast_total_units * lead_time_days`. This assumes a near-constant
+  daily demand rate across the window -- a simplification, not a per-day
+  recursive forecast.
 - **Safety stock formula**: `demand_std * SAFETY_STOCK_SERVICE_FACTOR`,
   where `demand_std` is the standard deviation of the product's total
   historical daily sales (summed across stores) over the full 2-year

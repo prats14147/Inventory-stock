@@ -8,10 +8,11 @@ LEAKAGE DESIGN (see docs/limitations.md "Forecasting feature design"):
   - Lag/rolling features use only data up to and including the origin date T.
   - Target-date (T+h) time features (day of week, month, etc.) are used --
     these are calendar facts, always knowable in advance.
-  - Target-date Price / Discount / Holiday-Promotion / Competitor Pricing
-    are used under the standard retail-forecasting assumption that pricing
-    and promotion calendars are planned ahead of the forecast horizon.
-    This is a documented assumption, not a data fact.
+  - The dataset has no separately recorded planned price/promotion calendar.
+    At inference, target-date Price / Discount / Holiday-Promotion /
+    Competitor Pricing are carried forward from the latest known row. The
+    training frame does the same instead of using the actual future values,
+    so historical evaluation matches what the live model can know.
   - Inventory Level uses ONLY the origin-date (T) value -- future inventory
     depends on events between T and T+h that aren't knowable at forecast
     time, so using the target-date value would be leakage.
@@ -146,6 +147,17 @@ def build_supervised_frame(df: pd.DataFrame, horizon: int) -> pd.DataFrame:
         target_shifted = target_slice.shift(-horizon)
 
         combined = pd.concat([origin, target_shifted], axis=1)
+        # At inference, planned future business values are unavailable, so
+        # build_live_feature_row carries forward the latest observed values.
+        # Mirror that assumption in training/validation/test rows rather than
+        # leaking actual future price or promotion values into model inputs.
+        for target_column, origin_column in {
+            "target_price": "origin_price",
+            "target_discount": "origin_discount",
+            "target_promotion": "origin_promotion",
+            "target_competitor_pricing": "origin_competitor_pricing",
+        }.items():
+            combined[target_column] = combined[origin_column]
         combined["Store ID"] = store_id
         combined["Product ID"] = product_id
         frames.append(combined)

@@ -107,7 +107,11 @@ def forecast_daily_rate_and_history_std(db: Session, product_id: str, lead_time_
     """
     nearest_horizon = _nearest_available_horizon(lead_time_days)
     forecast = forecast_product_demand(db, product_id, horizon=nearest_horizon)
-    forecast_daily_rate = forecast["forecast_total_units"] / nearest_horizon
+    # forecast_total_units is the sum of the per-store prediction for the
+    # single target date T+h, so it is already a daily product-wide quantity.
+    # Dividing by the model horizon would mix daily units with period units
+    # and materially understate lead-time demand.
+    forecast_daily_rate = forecast["forecast_total_units"]
     forecast_lead_time_demand = forecast_daily_rate * lead_time_days
 
     history = get_full_history_dataframe_cached(db)

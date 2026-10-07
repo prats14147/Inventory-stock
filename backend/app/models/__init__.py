@@ -2,6 +2,7 @@ from app.database import Base
 from app.models.inventory import DailyInventory
 from app.models.product import Product
 from app.models.realtime import LiveSalesEvent, StockoutAlert
+from app.models.sales_day_closure import SalesDayClosure
 from app.models.sales import DailySales
 from app.models.sales import SalesTransaction
 from app.models.store import Store
@@ -16,5 +17,6 @@ __all__ = [
     "SalesTransaction",
     "LiveSalesEvent",
     "StockoutAlert",
+    "SalesDayClosure",
     "WatchlistItem",
 ]

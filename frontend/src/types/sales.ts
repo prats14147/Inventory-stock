@@ -65,6 +65,25 @@ export interface BulkImportResponse {
   errors: CsvRowError[];
 }
 
+export interface CloseSalesDayResponse {
+  business_date: string;
+  store_id: string;
+  closed_at: string;
+  already_closed: boolean;
+}
+
+export interface SalesDayCoverageStore {
+  store_id: string;
+  complete_days_last_365: number;
+  latest_complete_date: string | null;
+}
+
+export interface SalesDayCoverageResponse {
+  stores: SalesDayCoverageStore[];
+  recommended_minimum_complete_days: number;
+  annual_seasonality_days: number;
+}
+
 export interface SalesSourcesSummaryResponse {
   total_sales_count: number;
   sample_data_count: number;

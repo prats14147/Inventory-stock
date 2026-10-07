@@ -28,6 +28,29 @@ def test_forecast_nearest_horizon_used_when_not_exactly_trained(db):
     assert info["lead_time_days"] == 10
 
 
+def test_lead_time_demand_uses_daily_forecast_units(monkeypatch):
+    import pandas as pd
+
+    forecast = {"forecast_total_units": 600.0}
+    history = pd.DataFrame({
+        "Product ID": ["P0001", "P0001"],
+        "Date": pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        "Units Sold": [100, 120],
+    })
+    monkeypatch.setattr(
+        forecast_service,
+        "forecast_product_demand",
+        lambda _db, _product_id, horizon: {**forecast, "model_horizon_days": horizon},
+    )
+    monkeypatch.setattr(forecast_service, "get_full_history_dataframe_cached", lambda _db: history)
+    info = forecast_service.forecast_daily_rate_and_history_std(None, "P0001", lead_time_days=7)
+
+    # The model predicts one day's sales at T+7, summed across stores. It is
+    # already a daily rate and must not be divided by the horizon again.
+    assert info["forecast_daily_rate"] == pytest.approx(600.0)
+    assert info["forecast_lead_time_demand"] == pytest.approx(4200.0)
+
+
 def test_stockout_risk_formula_consistency(db):
     """required_inventory must always equal forecast_lead_time_demand + safety_stock."""
     result = stockout_service.calculate_stockout_risk(db, "P0001")

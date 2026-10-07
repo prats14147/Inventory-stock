@@ -5,9 +5,11 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 import {
   ApiError,
   bulkImportSales,
+  closeSalesDay,
   getCurrentInventory,
   getProductCosts,
   getSales,
+  getSalesDayCoverage,
   getSalesByCategory,
   getSalesByStore,
   getSalesSourcesSummary,
@@ -42,6 +44,14 @@ export default function Sales() {
   const [savingSale, setSavingSale] = useState(false);
   const [saleError, setSaleError] = useState("");
   const [saleSuccess, setSaleSuccess] = useState("");
+  const [closingDate, setClosingDate] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  });
+  const [closingStore, setClosingStore] = useState("");
+  const [closingDay, setClosingDay] = useState(false);
+  const [closeDayMessage, setCloseDayMessage] = useState("");
+  const [closeDayError, setCloseDayError] = useState("");
 
   // CSV Bulk Import state
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -66,6 +76,7 @@ export default function Sales() {
   const productCosts = useApi(() => getProductCosts(), [refreshKey]);
   const profitability = useApi(() => getStoreProfitability(), [refreshKey]);
   const sourcesSummary = useApi(() => getSalesSourcesSummary(), [refreshKey]);
+  const dayCoverage = useApi(() => getSalesDayCoverage(), [refreshKey]);
   const top = useApi(
     () => getTopProducts(10, undefined, undefined, apiFilterParams.source, apiFilterParams.genuine_only),
     [apiFilterParams, refreshKey]
@@ -94,6 +105,7 @@ export default function Sales() {
   );
 
   const stockRows = stock.data ?? [];
+  const storeIds = [...new Set(stockRows.map((row) => row.store_id))].sort();
   const selectedStock = useMemo(
     () => stockRows.find((row) => `${row.product_id}::${row.store_id}` === selectedStockKey),
     [stockRows, selectedStockKey]
@@ -132,6 +144,27 @@ export default function Sales() {
       setSaleError(err instanceof ApiError ? err.message : "Could not record the sale. Please try again.");
     } finally {
       setSavingSale(false);
+    }
+  }
+
+  async function submitCloseDay(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!closingStore) return;
+    setClosingDay(true);
+    setCloseDayError("");
+    setCloseDayMessage("");
+    try {
+      const result = await closeSalesDay({ business_date: closingDate, store_id: closingStore });
+      setCloseDayMessage(
+        result.already_closed
+          ? `Sales for ${result.store_id} on ${result.business_date} were already marked complete.`
+          : `Sales for ${result.store_id} on ${result.business_date} are marked complete, including a zero-sales day if nothing was sold.`
+      );
+      setRefreshKey((key) => key + 1);
+    } catch (err) {
+      setCloseDayError(err instanceof ApiError ? err.message : "Could not mark this sales day complete.");
+    } finally {
+      setClosingDay(false);
     }
   }
 
@@ -195,6 +228,40 @@ export default function Sales() {
         title="Sales Analytics & Operations"
         subtitle="Manage genuine sales, perform bulk CSV imports, and analyze genuine demand separately from the synthetic sample dataset."
       />
+
+      <Card>
+        <h2 className="text-lg font-semibold text-gray-900">Confirm a complete sales day</h2>
+        <p className="mt-1 text-sm text-gray-600">
+          After all sales for a store and date are entered, mark the day complete. This confirms that a missing sale means zero sales, which is important for future real-data forecasts.
+        </p>
+        <form onSubmit={submitCloseDay} className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="space-y-1 text-sm font-medium text-gray-700">
+            Store
+            <select required value={closingStore} onChange={(event) => setClosingStore(event.target.value)} className="block rounded-lg border border-gray-300 bg-white px-3 py-2 font-normal">
+              <option value="">Select store</option>
+              {storeIds.map((storeId) => <option key={storeId} value={storeId}>{storeId}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1 text-sm font-medium text-gray-700">
+            Business date
+            <input required type="date" value={closingDate} onChange={(event) => setClosingDate(event.target.value)} className="block rounded-lg border border-gray-300 px-3 py-2 font-normal" />
+          </label>
+          <button type="submit" disabled={closingDay || stock.loading || !closingStore} className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50">
+            {closingDay ? "Saving…" : "Mark sales day complete"}
+          </button>
+        </form>
+        {closeDayError && <p role="alert" className="mt-3 text-sm text-red-700">{closeDayError}</p>}
+        {closeDayMessage && <p role="status" className="mt-3 text-sm text-green-700">{closeDayMessage}</p>}
+        {dayCoverage.data && (
+          <div className="mt-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
+            {(() => {
+              const selectedCoverage = dayCoverage.data.stores.find((item) => item.store_id === closingStore);
+              const count = selectedCoverage?.complete_days_last_365 ?? 0;
+              return <>{closingStore || "Selected store"}: <strong>{count} / 180</strong> complete days in the last year for an initial real-data model evaluation. About 365 days helps evaluate annual seasonality. Meeting these counts does not guarantee the real model will outperform the current forecast.</>;
+            })()}
+          </div>
+        )}
+      </Card>
 
       {/* KPI Overview Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

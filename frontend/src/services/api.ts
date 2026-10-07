@@ -12,8 +12,10 @@ import type {
 import type {
   BulkImportResponse,
   CategorySalesSummary,
+  CloseSalesDayResponse,
   DailySaleRow,
   SalesSourcesSummaryResponse,
+  SalesDayCoverageResponse,
   SalesTrendResponse,
   StoreProfitabilityResponse,
   StoreSalesSummary,
@@ -221,6 +223,15 @@ export const bulkImportSales = (payload: { csv_content?: string; rows?: unknown[
     method: "POST",
     body: JSON.stringify(payload),
   });
+
+export const closeSalesDay = (payload: { business_date: string; store_id: string }) =>
+  request<CloseSalesDayResponse>("/api/sales/close-day", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const getSalesDayCoverage = () =>
+  request<SalesDayCoverageResponse>("/api/sales/day-coverage");
 
 export const getSalesSourcesSummary = () =>
   request<SalesSourcesSummaryResponse>("/api/sales/sources");

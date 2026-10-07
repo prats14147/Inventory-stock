@@ -124,6 +124,30 @@ class BulkImportResponse(BaseModel):
     errors: list[CsvRowError]
 
 
+class CloseSalesDayRequest(BaseModel):
+    business_date: date_type
+    store_id: str = Field(min_length=1, max_length=20)
+
+
+class CloseSalesDayResponse(BaseModel):
+    business_date: date_type
+    store_id: str
+    closed_at: str
+    already_closed: bool = False
+
+
+class SalesDayCoverageStore(BaseModel):
+    store_id: str
+    complete_days_last_365: int
+    latest_complete_date: date_type | None
+
+
+class SalesDayCoverageResponse(BaseModel):
+    stores: list[SalesDayCoverageStore]
+    recommended_minimum_complete_days: int = 180
+    annual_seasonality_days: int = 365
+
+
 class SalesSourcesSummaryResponse(BaseModel):
     total_sales_count: int
     sample_data_count: int

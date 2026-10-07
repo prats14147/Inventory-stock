@@ -1,17 +1,22 @@
 """backend/app/services/sales_service.py"""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import case, func, literal, select
 from sqlalchemy.orm import Session
 
-from app.models import DailyInventory, DailySales, Product
+from app.models import DailyInventory, DailySales, Product, Store
+from app.models.sales_day_closure import SalesDayClosure
 from app.models.stock_movement import StockMovement, SALE
 from app.models.sales import SalesTransaction
 from app.repositories import product_repository, sales_repository
 from app.repositories import inventory_repository
 from app.schemas.sales import (
     CategorySalesSummary,
+    CloseSalesDayRequest,
+    CloseSalesDayResponse,
+    SalesDayCoverageResponse,
+    SalesDayCoverageStore,
     ProductSalesRank,
     SalesListResponse,
     SalesRecord,
@@ -28,6 +33,76 @@ from app.services.stockout_service import clear_risk_cache
 
 VALID_GRANULARITIES = {"daily", "weekly", "monthly"}
 MAX_LIMIT = 1000
+
+
+def close_sales_day(db: Session, payload: CloseSalesDayRequest) -> CloseSalesDayResponse:
+    """Mark a store/date's sales as fully entered, including a zero-sales day."""
+    if payload.business_date > date.today():
+        raise InvalidRequestError("A future sales day cannot be marked complete.")
+    if db.get(Store, payload.store_id) is None:
+        raise NotFoundError(f"Store '{payload.store_id}' was not found.")
+    has_sample_sales = db.scalar(
+        select(DailySales.date)
+        .where(
+            DailySales.date == payload.business_date,
+            DailySales.store_id == payload.store_id,
+            DailySales.source == "Sample Data",
+        )
+        .limit(1)
+    )
+    if has_sample_sales is not None:
+        raise InvalidRequestError(
+            "This date contains sample dataset sales. Mark complete only after entering real sales for a real business day."
+        )
+
+    key = (payload.business_date, payload.store_id)
+    closure = db.get(SalesDayClosure, key)
+    already_closed = closure is not None
+    if closure is None:
+        closure = SalesDayClosure(
+            business_date=payload.business_date,
+            store_id=payload.store_id,
+            closed_at=datetime.now(),
+            source="manual",
+        )
+        db.add(closure)
+        db.commit()
+        db.refresh(closure)
+
+    return CloseSalesDayResponse(
+        business_date=closure.business_date,
+        store_id=closure.store_id,
+        closed_at=closure.closed_at.isoformat(),
+        already_closed=already_closed,
+    )
+
+
+def get_sales_day_coverage(db: Session) -> SalesDayCoverageResponse:
+    """Return complete real-sales days per store over the last 365 days."""
+    cutoff = date.today() - timedelta(days=364)
+    rows = db.execute(
+        select(
+            SalesDayClosure.store_id,
+            func.count(SalesDayClosure.business_date),
+            func.max(SalesDayClosure.business_date),
+        )
+        .where(SalesDayClosure.business_date >= cutoff)
+        .group_by(SalesDayClosure.store_id)
+    ).all()
+    coverage = {
+        store_id: SalesDayCoverageStore(
+            store_id=store_id,
+            complete_days_last_365=int(count),
+            latest_complete_date=latest_date,
+        )
+        for store_id, count, latest_date in rows
+    }
+    stores = db.execute(select(Store.store_id).order_by(Store.store_id)).scalars().all()
+    return SalesDayCoverageResponse(
+        stores=[coverage.get(store_id, SalesDayCoverageStore(
+            store_id=store_id, complete_days_last_365=0, latest_complete_date=None
+        )) for store_id in stores]
+    )
 
 
 def record_sale(db: Session, payload: RecordSaleRequest) -> RecordSaleResponse:
