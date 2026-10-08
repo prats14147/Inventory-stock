@@ -260,6 +260,10 @@ Layered as `Router -> Service -> Repository -> Database`.
 
 ## Installation
 
+### Use Supabase for PostgreSQL
+
+For step-by-step instructions to connect the local backend to a Supabase database, apply migrations, seed a new project, or preserve an existing database, see [docs/supabase_database_setup.md](docs/supabase_database_setup.md). This deploys the database only; the API and frontend remain local unless deployed separately.
+
 ### Start the full app on Windows
 
 After the first-time setup below is complete, open PowerShell in the project

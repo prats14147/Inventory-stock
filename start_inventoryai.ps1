@@ -42,6 +42,19 @@ function Wait-ForPort([string]$HostName, [int]$Port, [int]$Seconds, [string]$Nam
     return $false
 }
 
+function Get-DatabaseUrl {
+    # Match Pydantic Settings precedence: an inherited process environment
+    # variable wins over the root .env file.
+    if (-not [string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
+        return $env:DATABASE_URL.Trim().Trim('"').Trim("'")
+    }
+
+    $envFile = Join-Path $projectRoot '.env'
+    $line = Get-Content $envFile | Where-Object { $_ -match '^\s*DATABASE_URL\s*=' } | Select-Object -First 1
+    if (-not $line) { return $null }
+    return (($line -replace '^\s*DATABASE_URL\s*=\s*', '').Trim().Trim('"').Trim("'"))
+}
+
 if (-not (Test-Path $python)) {
     throw "Python environment is missing. From the project folder, create .venv and install requirements.txt first. See README.md -> Installation."
 }
@@ -53,23 +66,38 @@ if (-not (Test-Path (Join-Path $projectRoot '.env'))) {
 }
 
 Write-Host 'InventoryAI startup' -ForegroundColor Cyan
-Write-Host '1/4 Checking PostgreSQL...'
-if (-not (Test-TcpPort '127.0.0.1' 5432)) {
-    $docker = Get-Command docker -ErrorAction SilentlyContinue
-    if ($docker) {
-        Write-Host 'PostgreSQL is not answering yet. Asking Docker Compose to start the database...'
-        & $docker.Source compose up -d postgres
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Docker could not start PostgreSQL. Open Docker Desktop, then run this script again.'
+$databaseUrl = Get-DatabaseUrl
+if ([string]::IsNullOrWhiteSpace($databaseUrl)) {
+    throw 'DATABASE_URL is missing. Set it in the root .env file before starting InventoryAI.'
+}
+try {
+    $databaseHost = ([System.Uri]::new($databaseUrl)).DnsSafeHost.ToLowerInvariant()
+} catch {
+    throw 'DATABASE_URL is not a valid PostgreSQL connection URL. Check the root .env file.'
+}
+$isLocalDatabase = $databaseHost -in @('localhost', '127.0.0.1', '::1') -or $databaseHost.StartsWith('127.')
+if ($isLocalDatabase) {
+    Write-Host '1/4 Checking local PostgreSQL...'
+    if (-not (Test-TcpPort '127.0.0.1' 5432)) {
+        $docker = Get-Command docker -ErrorAction SilentlyContinue
+        if ($docker) {
+            Write-Host 'PostgreSQL is not answering yet. Asking Docker Compose to start the database...'
+            & $docker.Source compose up -d postgres
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Docker could not start PostgreSQL. Open Docker Desktop, then run this script again.'
+            }
+        } else {
+            throw 'PostgreSQL is not answering on port 5432, and Docker is not installed/on PATH. Start your local PostgreSQL service or install/start Docker Desktop, then retry.'
         }
-    } else {
-        throw 'PostgreSQL is not answering on port 5432, and Docker is not installed/on PATH. Start your local PostgreSQL service or install/start Docker Desktop, then retry.'
     }
+    if (-not (Wait-ForPort '127.0.0.1' 5432 $DatabaseWaitSeconds 'PostgreSQL')) {
+        throw "PostgreSQL did not become ready within $DatabaseWaitSeconds seconds. Check Docker Desktop or your PostgreSQL service."
+    }
+    Write-Host '   Local PostgreSQL accepts connections.' -ForegroundColor Green
+} else {
+    Write-Host "1/4 Using remote PostgreSQL host: $databaseHost"
+    Write-Host '   The database migration in the next step will check the connection.' -ForegroundColor Green
 }
-if (-not (Wait-ForPort '127.0.0.1' 5432 $DatabaseWaitSeconds 'PostgreSQL')) {
-    throw "PostgreSQL did not become ready within $DatabaseWaitSeconds seconds. Check Docker Desktop or your PostgreSQL service."
-}
-Write-Host '   PostgreSQL accepts connections.' -ForegroundColor Green
 
 Write-Host '2/4 Updating the database schema...'
 Push-Location (Join-Path $projectRoot 'backend')
