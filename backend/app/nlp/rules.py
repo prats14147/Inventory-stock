@@ -297,9 +297,42 @@ def _extract_date_range(message: str) -> dict | None:
     return None
 
 
+_COMPARE_RE = re.compile(
+    r"\bcompar(?:e|ison|ing)\b|\bvs\.?\b|\bversus\b|\bdifference between\b|"
+    r"\bwhich (?:one|product) is (?:riskier|worse|better|lower|higher)\b",
+    re.IGNORECASE,
+)
+
+
+def _mentions_two_products(message: str) -> bool:
+    """Two distinct P-codes, an explicit two-sided comparison (A vs B), or a
+    compare request naming at least one product ("compare P0001 risk" still
+    belongs to the compare flow, which asks for the second product).
+
+    Store/category comparisons ("compare stores") are excluded so the
+    existing STORE_ANALYSIS/CATEGORY_ANALYSIS rules keep them.
+    """
+    ids = {f"P{int(number):04d}" for number in _PRODUCT_RE.findall(message)}
+    if len(ids) >= 2:
+        return True
+    lower = message.lower()
+    if re.search(r"\bvs\.?\b|\bversus\b|\bdifference between\b", lower):
+        return True
+    if ids and re.search(r"\band\b", lower):
+        return True
+    if (
+        re.search(r"\band\b", lower)
+        and not re.search(r"\b(store|stores|categor\w+|region|regions)\b", lower)
+    ):
+        return True
+    return False
+
+
 def classify_intent(message: str) -> Intent:
     message = _normalize_domain_terms(message)
     lower = message.lower()
+    if _COMPARE_RE.search(message) and _mentions_two_products(message):
+        return Intent.PRODUCT_COMPARE
     if re.search(r"\b(?:stock|inventory)\s+(?:history|movements?|changes|adjustments?)\b", lower):
         return Intent.STOCK_HISTORY
     if re.search(r"\b(?:show|list|when|what|how many)\b.{0,50}\b(?:receive(?:d)?|deliver(?:ed)?|damaged|broken|expired|wasted|adjusted|removed)\b", lower):
@@ -318,9 +351,9 @@ def classify_intent(message: str) -> Intent:
         r"\b(?:selling fast|selling quickly|fast[- ]selling|quick[- ]selling|high velocity|moving quickly)\b", lower
     ):
         return Intent.LOW_STOCK_FAST_SELLING
-    has_store_scope = re.search(r"\b(store|location)\b", lower) or _STORE_RE.search(message)
+    has_store_scope = re.search(r"\b(stores?|locations?)\b", lower) or _STORE_RE.search(message)
     if has_store_scope and re.search(
-        r"\b(profit|profitable|loss|losing|margin|condition|health|performance|doing|money)\b", lower
+        r"\b(profit|profitable|loss|losing|margin|condition|health|performance|performing|doing|money)\b", lower
     ):
         return Intent.STORE_PROFITABILITY
     if re.search(r"\b(units?|items?)\b", lower) and re.search(r"\b(sell|sold|sales)\b", lower):

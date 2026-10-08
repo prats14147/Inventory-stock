@@ -136,8 +136,9 @@ plainly to any reader of the forecasting results, not glossed over.
   Chat prepares previews and requires confirmation before changing stock;
   damage/receiving movements do not create sales or revenue records.
 - Capability coverage is bounded by the registry and stored data. Products
-  are currently identified by P-codes only; a friendly name cannot be
-  resolved because the product table has no product-name field. Ambiguous or
+  can be named by catalog name, SKU (exact or fuzzy, see
+  `app/nlp/catalog_resolve.py`), or P-code; genuinely ambiguous references
+  ("wireless" matches two products) are clarified, never guessed. Ambiguous or
   unsupported questions should be clarified. The model cannot run arbitrary
   SQL or safely perform unconfirmed actions.
 

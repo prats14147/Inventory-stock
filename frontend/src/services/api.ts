@@ -17,7 +17,7 @@ import type {
   TopProductsResponse,
 } from "../types/sales";
 import type { ForecastResponse } from "../types/forecast";
-import type { StockoutRiskResponse } from "../types/stockout";
+import type { RiskLevel, StockoutRiskResponse } from "../types/stockout";
 import type { ReorderResponse } from "../types/reorder";
 import type {
   ProductCostRow,
@@ -392,6 +392,12 @@ export const deleteChatSession = (sessionId: string) =>
 export const createChatSession = () =>
   request<{ session_id: string; created_at: string }>("/api/chat/sessions", { method: "POST", body: JSON.stringify({}) });
 
+export const submitChatFeedback = (payload: { session_id: string; turn_index: number; helpful: boolean }) =>
+  request<{ session_id: string; turn_index: number; helpful: boolean; recorded: boolean }>(
+    "/api/chat/feedback",
+    { method: "POST", body: JSON.stringify(payload) }
+  );
+
 // --- Live / real-time (Tier 1) ---
 export const getLiveSummary = () => request<LiveSummary>("/api/live/summary");
 export const getLiveEvents = (limit = 25) =>
@@ -462,6 +468,29 @@ export const exportStockoutCsv = async (items: StockoutRiskResponse[]) => {
 // --- Dashboard (Tier A) ---
 /** The whole dashboard in one request. Replaces five parallel calls. */
 export const getDashboardSummary = () => request<DashboardSummary>("/api/dashboard/summary");
+
+// --- Morning briefing (proactive digest) ---
+export interface BriefingRisk {
+  product_id: string;
+  name: string;
+  risk: RiskLevel;
+  current_inventory: number;
+  required_inventory: number;
+}
+export interface BriefingSuggestion {
+  product_id: string;
+  name: string;
+  risk: RiskLevel;
+  suggested_quantity: number;
+}
+export interface MorningBriefing {
+  headline: string;
+  open_alerts: number;
+  critical_alerts: number;
+  top_risks: BriefingRisk[];
+  suggested_orders: BriefingSuggestion[];
+}
+export const getMorningBriefing = () => request<MorningBriefing>("/api/briefing");
 
 // --- Settings (admin ops knobs) ---
 export interface SystemSettingsResponse {

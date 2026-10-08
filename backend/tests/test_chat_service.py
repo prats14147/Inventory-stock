@@ -517,3 +517,121 @@ def test_chat_demand_forecast_column_never_appears_in_response(db):
     """The chatbot must never surface the leaky source `Demand Forecast` column."""
     r = handle_chat_message(db, "Forecast P0001.")
     assert "demand_forecast_reference" not in json.dumps(r.data)
+
+
+# --- Upgrade #1: human-friendly product resolution (name/SKU/fuzzy) --------
+
+def test_catalog_resolve_exact_name(db):
+    from app.nlp import catalog_resolve
+    product_id, candidates = catalog_resolve.resolve_product(
+        db, "How much stock for kitchen blender?", "blender"
+    )
+    assert product_id == "P0007"
+    assert candidates == []
+
+
+def test_catalog_resolve_sku(db):
+    from app.nlp import catalog_resolve
+    product_id, candidates = catalog_resolve.resolve_product(
+        db, "Stock for WM-020?", "WM-020"
+    )
+    assert product_id == "P0020"
+    assert candidates == []
+
+
+def test_catalog_resolve_ambiguous_returns_candidates(db):
+    from app.nlp import catalog_resolve
+    product_id, candidates = catalog_resolve.resolve_product(
+        db, "How much stock for wireless?", "wireless"
+    )
+    assert product_id is None
+    assert {item.product_id for item in candidates} == {"P0001", "P0020"}
+
+
+def test_catalog_resolve_typo_fuzzy_matches(db):
+    from app.nlp import catalog_resolve
+    product_id, _ = catalog_resolve.resolve_product(
+        db, "How much stock for headpones?", "headpones"
+    )
+    assert product_id == "P0001"
+
+
+def test_catalog_resolve_unknown_returns_nothing(db):
+    from app.nlp import catalog_resolve
+    product_id, candidates = catalog_resolve.resolve_product(
+        db, "How much stock for unobtainium?", "unobtainium"
+    )
+    assert product_id is None
+    assert candidates == []
+
+
+def test_chat_answers_product_name_without_pcode(db):
+    r = handle_chat_message(db, "How much stock do we have for kitchen blender?")
+    assert r.intent == Intent.CURRENT_STOCK
+    assert r.data is not None
+    assert r.data["product_id"] == "P0007"
+
+
+def test_chat_ambiguous_name_asks_which_product(db):
+    r = handle_chat_message(db, "How much stock for wireless?")
+    assert r.data is None
+    assert "more than one product" in r.message
+    assert "P0001" in r.message and "P0020" in r.message
+
+
+def test_chat_unknown_name_still_asks_for_pcode(db):
+    r = handle_chat_message(db, "How much stock for unobtainium?")
+    assert r.data is None
+    assert "P-code" in r.message
+
+
+# --- Upgrade #3: multi-product compare + chained draft PO -------------------
+
+def test_chat_compare_two_products_by_pcode(db):
+    r = handle_chat_message(db, "Compare P0001 and P0002 risk")
+    assert r.intent == Intent.PRODUCT_COMPARE
+    assert r.data is not None
+    assert {item["product_id"] for item in r.data["products"]} == {"P0001", "P0002"}
+    assert r.data["verdict_product_id"] in {"P0001", "P0002"}
+
+
+def test_chat_compare_by_names(db):
+    r = handle_chat_message(db, "Compare kitchen blender and headphones")
+    assert r.intent == Intent.PRODUCT_COMPARE
+    assert {item["product_id"] for item in r.data["products"]} == {"P0007", "P0001"}
+
+
+def test_chat_compare_needs_two_products(db):
+    r = handle_chat_message(db, "Compare P0001 and tell me which is riskier")
+    assert r.intent == Intent.PRODUCT_COMPARE
+    assert r.data["compare_status"] == "needs_products"
+
+
+def test_chat_compare_and_draft_po_same_message(db):
+    from app.models import PurchaseOrder
+    r = handle_chat_message(
+        db, "Compare P0001 vs P0002 and draft a PO for the riskier one at S001"
+    )
+    assert r.intent == Intent.PRODUCT_COMPARE
+    assert r.data["compare_status"] == "draft_created"
+    order = r.data["purchase_order"]
+    assert order["status"] == "DRAFT"
+    assert order["store_id"] == "S001"
+    assert db.get(PurchaseOrder, order["id"]) is not None
+
+
+def test_chat_compare_draft_follow_up_store(db):
+    from app.models import PurchaseOrder
+    from app.services.chat_service import get_chat_session_manager
+    manager = get_chat_session_manager()
+    first = manager.handle_message(
+        db, "Compare P0001 vs P0002 and draft a PO for the riskier one",
+        session_id="test-compare-followup", user_id=None,
+    )
+    assert first.data["compare_status"] == "awaiting_store"
+    second = manager.handle_message(
+        db, "S001", session_id="test-compare-followup", user_id=None
+    )
+    assert second.data["compare_status"] == "draft_created"
+    assert second.data["purchase_order"]["store_id"] == "S001"
+    assert db.get(PurchaseOrder, second.data["purchase_order"]["id"]) is not None

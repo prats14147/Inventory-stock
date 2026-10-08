@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.routers import (
     auth,
+    briefing,
     chat,
     dashboard,
     forecast,
@@ -147,6 +148,7 @@ app.include_router(ws.router)
 app.include_router(live.router)
 app.include_router(watchlist.router)
 app.include_router(dashboard.router)
+app.include_router(briefing.router)
 app.include_router(settings_router.router)
 app.include_router(model_health.router)
 app.include_router(purchase_orders.router)

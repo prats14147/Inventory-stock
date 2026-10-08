@@ -3,7 +3,7 @@
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line, PieChart, Pie, Cell } from "recharts";
 import { Link } from "react-router-dom";
 import { useApi } from "../hooks/useApi";
-import { getDashboardSummary } from "../services/api";
+import { getDashboardSummary, getMorningBriefing } from "../services/api";
 import PageHeader from "../components/PageHeader";
 import Card from "../components/Card";
 import StatCard from "../components/StatCard";
@@ -25,6 +25,8 @@ export default function Dashboard() {
   // in progressively instead of showing one spinner for everything.
   const summary = summaryQuery.data;
   const { loading: summaryLoading, error: summaryError } = summaryQuery;
+  const briefingQuery = useApi(() => getMorningBriefing(), []);
+  const briefing = briefingQuery.data;
 
   const highRiskCount = summary?.risk_counts.high ?? 0;
   const mediumRiskCount = summary?.risk_counts.medium ?? 0;
@@ -60,6 +62,36 @@ export default function Dashboard() {
           ) : null
         }
       />
+
+      {/* Proactive briefing: what matters today, without being asked. */}
+      {briefing && (
+        <div className="rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-brand-900">
+              <span className="mr-2 font-semibold">☀️ Morning briefing</span>
+              {briefing.headline}
+            </p>
+            <div className="flex gap-2 text-xs font-medium">
+              {briefing.critical_alerts > 0 && (
+                <Link to="/live" className="rounded-lg bg-red-600 px-2.5 py-1 text-white hover:bg-red-700">
+                  {briefing.critical_alerts} critical alert{briefing.critical_alerts === 1 ? "" : "s"} →
+                </Link>
+              )}
+              {briefing.suggested_orders.length > 0 && (
+                <Link to="/reorder" className="rounded-lg bg-brand-600 px-2.5 py-1 text-white hover:bg-brand-700">
+                  Review {briefing.suggested_orders.length} suggested order{briefing.suggested_orders.length === 1 ? "" : "s"} →
+                </Link>
+              )}
+            </div>
+          </div>
+          {briefing.suggested_orders.length > 0 && (
+            <p className="mt-1 text-xs text-brand-800">
+              Suggested drafts:{" "}
+              {briefing.suggested_orders.map((s) => `${s.name} × ${s.suggested_quantity}`).join(" · ")}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Tier B: the "what do I do first" block, at the very top. */}
       <NeedsAttentionPanel

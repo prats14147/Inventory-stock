@@ -173,3 +173,16 @@ def test_cors_present_on_simple_get_not_just_preflight():
     assert r.status_code == 200
     assert r.headers.get("access-control-allow-origin") in ("*", "http://localhost:5173")
 
+
+
+def test_morning_briefing_shape_and_consistency():
+    r = client.get("/api/briefing")
+    assert r.status_code == 200
+    body = r.json()
+    assert "headline" in body and isinstance(body["headline"], str)
+    assert body["critical_alerts"] <= body["open_alerts"]
+    assert len(body["top_risks"]) <= 3
+    product_ids = {item["product_id"] for item in body["top_risks"]}
+    for suggestion in body["suggested_orders"]:
+        assert suggestion["product_id"] in product_ids
+        assert suggestion["suggested_quantity"] >= 1

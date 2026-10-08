@@ -31,6 +31,19 @@ class ChatResponse(BaseModel):
     context: Optional[dict[str, Any]] = None  # Active entities, topic, etc.
 
 
+class FeedbackRequest(BaseModel):
+    session_id: str
+    turn_index: int
+    helpful: bool
+
+
+class FeedbackResponse(BaseModel):
+    session_id: str
+    turn_index: int
+    helpful: bool
+    recorded: bool
+
+
 class SessionCreateRequest(BaseModel):
     user_id: Optional[str] = None
 

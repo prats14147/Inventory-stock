@@ -46,6 +46,7 @@ from app.nlp import (
     get_session_store,
     create_context_manager,
 )
+from app.nlp import catalog_resolve
 from app.nlp.entities import Entities
 from app.nlp.intent import PRODUCT_REQUIRED_INTENTS, Intent
 from app.nlp.request_planner import plan_request, prefer_explicit_stock_action
@@ -55,6 +56,7 @@ from app.nlp.rules import extract_entities, is_stock_write_request, looks_like_f
 from app.nlp.tool_registry import TOOL_DEFINITIONS, TOOLS_BY_NAME
 from app.repositories import product_repository
 from app.models import DailyInventory, DailySales, Product
+from app.models.purchase_order import PurchaseOrder
 from app.models.stock_movement import StockMovement
 from app.repositories import inventory_repository
 from app.schemas.sales import RecordSaleRequest
@@ -813,6 +815,180 @@ class ChatSessionManager:
                 f"after the sale it will be {stock.inventory_level - draft['units_sold']}. Estimated gross "
                 f"{'profit' if projected_profit >= 0 else 'loss'}: ${abs(projected_profit):.2f}."), data, Intent.RECORD_SALE
 
+    def _handle_chat_compare(
+        self,
+        db: Session,
+        session: SessionData,
+        session_id: str,
+        message: str,
+        entities: Entities,
+        method: str,
+        cm,
+    ):
+        """Upgrade #3: side-by-side risk/reorder for two products in one turn,
+        with an optional chained draft PO for the worse one.
+
+        Comparison is always safe (reads only). A draft PO only writes the
+        `units_ordered` reservation plus a DRAFT row -- stock itself changes on
+        receipt, through the same guarded DELIVERY path as the Reorder page.
+        """
+        pair = catalog_resolve.find_product_ids_in_message(db, message)
+        if entities.product_id and entities.product_id not in pair:
+            pair.insert(0, entities.product_id)
+
+        pending = dict(session.metadata.get("pending_compare") or {})
+        if len(pair) < 2:
+            if pending and entities.store_id:
+                return self._complete_compare_draft(
+                    db, session, session_id, pending, entities.store_id, method, cm
+                )
+            if pending:
+                response_text = (
+                    f"Still holding the draft PO for {pending['loser_product_id']} "
+                    f"({pending['quantity']} units) -- which store should receive it?"
+                )
+                self._save_turn(session_id, message, response_text, Intent.PRODUCT_COMPARE, method, {"compare_status": "awaiting_store", "pending_compare": pending}, entities)
+                return ConversationChatResponse(message=response_text, intent=Intent.PRODUCT_COMPARE,
+                    entities=entities.model_dump(), parse_method=method,
+                    data={"compare_status": "awaiting_store", "pending_compare": pending},
+                    session_id=session_id, context=cm.get_context_for_llm())
+            response_text = "Which two products should I compare? Give me two P-codes or names, for example 'compare P0001 and P0002'."
+            self._save_turn(session_id, message, response_text, Intent.PRODUCT_COMPARE, method, {"compare_status": "needs_products"}, entities)
+            return ConversationChatResponse(message=response_text, intent=Intent.PRODUCT_COMPARE,
+                entities=entities.model_dump(), parse_method=method,
+                data={"compare_status": "needs_products"},
+                session_id=session_id, context=cm.get_context_for_llm())
+
+        rows = []
+        for product_id in pair[:2]:
+            try:
+                risk = stockout_service.calculate_stockout_risk(db, product_id)
+                reorder = reorder_service.calculate_reorder(db, product_id)
+            except NotFoundError:
+                rows.append({"product_id": product_id, "unavailable": True})
+                continue
+            rows.append({
+                "product_id": product_id,
+                "name": risk.name,
+                "risk": risk.risk.value,
+                "current_inventory": risk.current_inventory,
+                "required_inventory": risk.required_inventory,
+                "recommended_reorder_quantity": reorder.recommended_reorder_quantity,
+            })
+        available = [row for row in rows if not row.get("unavailable")]
+        if not available:
+            response_text = f"I couldn't score {pair[0]} or {pair[1]} -- neither has enough sales history to forecast yet."
+            self._save_turn(session_id, message, response_text, Intent.PRODUCT_COMPARE, method, {"compare_status": "no_history"}, entities)
+            return ConversationChatResponse(message=response_text, intent=Intent.PRODUCT_COMPARE,
+                entities=entities.model_dump(), parse_method=method,
+                data={"compare_status": "no_history", "products": rows},
+                session_id=session_id, context=cm.get_context_for_llm())
+
+        _TIER_RANK = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+        if len(available) == 1:
+            verdict = available[0]
+            verdict_note = f"Only {verdict['product_id']} could be scored."
+        else:
+            first, second = available[0], available[1]
+            first_key = (_TIER_RANK[first["risk"]], first["required_inventory"] - first["current_inventory"])
+            second_key = (_TIER_RANK[second["risk"]], second["required_inventory"] - second["current_inventory"])
+            if first_key == second_key:
+                verdict, verdict_note = None, "Both score identically -- neither is riskier."
+            else:
+                verdict = first if first_key < second_key else second
+                verdict_note = f"{verdict['product_id']} is riskier."
+
+        lines = []
+        for row in rows:
+            if row.get("unavailable"):
+                lines.append(f"{row['product_id']}: not enough sales history to score.")
+            else:
+                lines.append(
+                    f"{row['product_id']} ({row['name']}): {row['risk']} risk, "
+                    f"{row['current_inventory']:.0f} on hand vs {row['required_inventory']:.0f} required, "
+                    f"reorder {row['recommended_reorder_quantity']:.0f} units."
+                )
+        data: dict = {"compare_status": "compared", "products": rows,
+                      "verdict_product_id": verdict["product_id"] if verdict else None,
+                      "verdict_note": verdict_note}
+
+        wants_draft = bool(re.search(
+            r"\b(draft|create|raise|place)\b.{0,40}\b(p\.?o\.?s?|purchase\s+orders?)\b"
+            r"|\border\b.{0,40}\bfor the (?:riskier|worse|loser)\b"
+            r"|\breorder\b.{0,20}\b(?:it|the (?:riskier|worse) one)\b",
+            message, re.IGNORECASE,
+        ))
+        if wants_draft and verdict is not None:
+            quantity = max(1, int(round(verdict["recommended_reorder_quantity"])))
+            if entities.store_id:
+                return self._create_compare_draft(
+                    db, session, session_id, message, entities, method, cm,
+                    verdict["product_id"], quantity, entities.store_id, lines, verdict_note, data,
+                )
+            session.metadata["pending_compare"] = {"loser_product_id": verdict["product_id"], "quantity": quantity}
+            self.session_store.save_session(session)
+            response_text = " ".join(lines) + f" {verdict_note} Tell me which store should receive the draft PO of {quantity} units (for example S001)."
+            data.update({"compare_status": "awaiting_store",
+                         "pending_compare": session.metadata["pending_compare"]})
+            self._save_turn(session_id, message, response_text, Intent.PRODUCT_COMPARE, method, data, entities)
+            return ConversationChatResponse(message=response_text, intent=Intent.PRODUCT_COMPARE,
+                entities=entities.model_dump(), parse_method=method, data=data,
+                session_id=session_id, context=cm.get_context_for_llm())
+
+        response_text = " ".join(lines) + f" {verdict_note}"
+        self._save_turn(session_id, message, response_text, Intent.PRODUCT_COMPARE, method, data, entities)
+        return ConversationChatResponse(message=response_text, intent=Intent.PRODUCT_COMPARE,
+            entities=entities.model_dump(), parse_method=method, data=data,
+            session_id=session_id, context=cm.get_context_for_llm())
+
+    def _create_compare_draft(
+        self, db: Session, session: SessionData, session_id: str, message: str,
+        entities: Entities, method: str, cm, product_id: str, quantity: int,
+        store_id: str, lines: list, verdict_note: str, data: dict,
+    ):
+        """Create a DRAFT purchase order with the router's reservation semantics."""
+        as_of = inventory_repository.get_latest_date(db)
+        row = db.get(DailyInventory, (as_of, store_id, product_id)) if as_of else None
+        if row is None:
+            response_text = " ".join(lines) + f" {verdict_note} I can't draft the PO: no inventory record for {product_id} at {store_id}."
+            self._save_turn(session_id, message, response_text, Intent.PRODUCT_COMPARE, method, data, entities)
+            return ConversationChatResponse(message=response_text, intent=Intent.PRODUCT_COMPARE,
+                entities=entities.model_dump(), parse_method=method, data=data,
+                session_id=session_id, context=cm.get_context_for_llm())
+        row.units_ordered += quantity
+        order = PurchaseOrder(
+            product_id=product_id, store_id=store_id, quantity=quantity,
+            status="DRAFT", note=f"Chat compare draft for {product_id} at {store_id}",
+            created_at=datetime.now(),
+        )
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+        session.metadata.pop("pending_compare", None)
+        self.session_store.save_session(session)
+        data.update({"compare_status": "draft_created", "purchase_order": order.to_dict()})
+        prefix = (" ".join(lines) + f" {verdict_note}").strip()
+        draft_sentence = (f"Draft PO #{order.id} created: {quantity} units of {product_id} "
+                          f"for {store_id}. Receive it on the Reorder page to post the delivery.")
+        response_text = f"{prefix} {draft_sentence}" if prefix else draft_sentence
+        self._save_turn(session_id, message, response_text, Intent.PRODUCT_COMPARE, method, data, entities)
+        return ConversationChatResponse(message=response_text, intent=Intent.PRODUCT_COMPARE,
+            entities=entities.model_dump(), parse_method=method, data=data,
+            session_id=session_id, context=cm.get_context_for_llm())
+
+    def _complete_compare_draft(
+        self, db: Session, session: SessionData, session_id: str,
+        pending: dict, store_id: str, method: str, cm,
+    ):
+        """Finish a pending compare draft once the user names the store."""
+        from app.nlp.rules import extract_entities as _extract
+        entities = _extract(f"store {store_id}")
+        return self._create_compare_draft(
+            db, session, session_id, f"store {store_id}", entities, method, cm,
+            pending["loser_product_id"], int(pending["quantity"]), store_id,
+            [], "", {"compare_status": "draft_created"},
+        )
+
     def _handle_stock_adjustment(self, db: Session, session: SessionData, message: str) -> tuple[str, dict, Intent]:
         """Preview and confirm a delivery or non-sale inventory correction."""
         pending = dict(session.metadata.get("pending_stock_adjustment") or {})
@@ -1192,6 +1368,31 @@ class ChatSessionManager:
             if carried_intent is not None:
                 intent, method = carried_intent, "context"
 
+        # 4c. Multi-product compare (Upgrade #3): side-by-side risk/reorder
+        # with an optional chained draft PO. Handled as its own branch
+        # because it spans two products plus a possible write.
+        if intent == Intent.PRODUCT_COMPARE:
+            return self._handle_chat_compare(
+                db, session, session_id, message, entities, method, cm
+            )
+        # 4d. Follow-up to a held compare draft ("S001", "yes, for S002").
+        # A bare store ID carries no intent, so it lands here as UNKNOWN.
+        pending_compare = dict(session.metadata.get("pending_compare") or {})
+        if pending_compare and intent == Intent.UNKNOWN:
+            if _NO_RE.fullmatch(message.strip()):
+                session.metadata.pop("pending_compare", None)
+                self.session_store.save_session(session)
+                response_text = "Draft PO cancelled. Nothing was ordered."
+                self._save_turn(session_id, message, response_text, Intent.PRODUCT_COMPARE, method, {"compare_status": "cancelled"}, entities)
+                return ConversationChatResponse(message=response_text, intent=Intent.PRODUCT_COMPARE,
+                    entities=entities.model_dump(), parse_method=method,
+                    data={"compare_status": "cancelled"},
+                    session_id=session_id, context=cm.get_context_for_llm())
+            if entities.store_id:
+                return self._complete_compare_draft(
+                    db, session, session_id, pending_compare, entities.store_id, method, cm
+                )
+
         # 5. Handle HELP and UNKNOWN
         if intent == Intent.HELP:
             response_text = HELP_TEXT
@@ -1254,7 +1455,7 @@ class ChatSessionManager:
                     context=cm.get_context_for_llm(),
                 )
 
-        if entities.product_reference and intent in {
+        if entities.product_reference and not entities.product_id and intent in {
             Intent.CURRENT_STOCK, Intent.REVENUE_ANALYSIS, Intent.FINANCIAL_ANALYSIS,
             Intent.STORE_PROFITABILITY, Intent.DEMAND_FORECAST, Intent.STOCKOUT_RISK,
             Intent.REORDER_RECOMMENDATION, Intent.SALES_TREND, Intent.TOP_SELLING,
@@ -1262,12 +1463,28 @@ class ChatSessionManager:
             Intent.LOW_STOCK, Intent.LOW_STOCK_FAST_SELLING,
             Intent.STOCK_HISTORY,
         }:
-            response_text = (f"I can't match the product name '{entities.product_reference}' to a catalog entry. "
-                             "This catalog currently identifies products by product ID; please provide its P-code so I can check the right item.")
-            self._save_turn(session_id, message, response_text, intent, method, {}, entities)
-            return ConversationChatResponse(message=response_text, intent=intent,
-                entities=entities.model_dump(), parse_method=method, data=None,
-                session_id=session_id, context=cm.get_context_for_llm())
+            # Upgrade #1: try the human-friendly catalog first (name/SKU/fuzzy)
+            # before asking for a P-code. Only genuinely ambiguous or unknown
+            # references still end in a clarification question.
+            resolved_id, candidates = catalog_resolve.resolve_product(
+                db, message, entities.product_reference
+            )
+            if resolved_id is not None:
+                entities.product_id = resolved_id
+            else:
+                if candidates:
+                    options = ", ".join(
+                        f"{item.name} ({item.product_id})" for item in candidates[:5]
+                    )
+                    response_text = (f"'{entities.product_reference}' matches more than one product: {options}. "
+                                     "Which one did you mean? You can reply with its P-code.")
+                else:
+                    response_text = (f"I can't match the product name '{entities.product_reference}' to a catalog entry. "
+                                     "Please provide its product ID (P-code) so I can check the right item.")
+                self._save_turn(session_id, message, response_text, intent, method, {}, entities)
+                return ConversationChatResponse(message=response_text, intent=intent,
+                    entities=entities.model_dump(), parse_method=method, data=None,
+                    session_id=session_id, context=cm.get_context_for_llm())
 
         # 7. Execute tool
         tool = TOOLS.get(intent)

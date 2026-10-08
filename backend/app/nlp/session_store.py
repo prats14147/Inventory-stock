@@ -77,6 +77,8 @@ class ConversationTurn(Base):
     entities_json = Column(Text, default="{}")
     parse_method = Column(String(20), nullable=True)
     data_json = Column(Text, default="{}")
+    # Upgrade #5: thumbs up/down on answers ("helpful"/"not_helpful"/None).
+    feedback = Column(String(10), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

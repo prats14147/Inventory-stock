@@ -11,6 +11,8 @@ from app.nlp.llm_client import build_llm_client
 from app.schemas.conversation import (
     ChatRequest,
     ChatResponse as ConversationChatResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     SessionCreateRequest,
     SessionCreateResponse,
     SessionInfo,
@@ -183,6 +185,38 @@ def chat(
         message=body.message,
         session_id=body.session_id,
         user_id=body.user_id or user_id,
+    )
+
+
+@router.post("/feedback")
+def chat_feedback(
+    body: FeedbackRequest,
+    db: Session = Depends(get_db),
+):
+    """Record thumbs up/down on one assistant answer (Upgrade #5).
+
+    Analytics only: it never changes past answers, it builds the eval
+    signal for future chatbot improvements.
+    """
+    from app.nlp.session_store import ConversationTurn
+
+    turn = (
+        db.query(ConversationTurn)
+        .filter(
+            ConversationTurn.session_id == body.session_id,
+            ConversationTurn.turn_index == body.turn_index,
+        )
+        .one_or_none()
+    )
+    if turn is None:
+        raise HTTPException(status_code=404, detail="Chat turn not found.")
+    turn.feedback = "helpful" if body.helpful else "not_helpful"
+    db.commit()
+    return FeedbackResponse(
+        session_id=body.session_id,
+        turn_index=body.turn_index,
+        helpful=body.helpful,
+        recorded=True,
     )
 
 
