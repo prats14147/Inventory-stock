@@ -155,6 +155,7 @@ def record_sale(db: Session, payload: RecordSaleRequest) -> RecordSaleResponse:
         sale.discount = round(((sale.discount * sale.units_sold) + (payload.discount * payload.units_sold)) / daily_total)
         sale.units_sold = daily_total
         sale.category, sale.region = payload.category, payload.region
+        sale.source = "Real · Manual"
         sale.holiday_promotion = sale.holiday_promotion or payload.holiday_promotion
         sale.weather_condition = payload.weather_condition
         sale.competitor_pricing = payload.competitor_pricing if payload.competitor_pricing is not None else payload.price
@@ -460,6 +461,10 @@ def get_store_analysis(
     )
     return [StoreSalesSummary(**row) for row in rows]
 
+
+def get_sales_sources_summary(db: Session) -> dict:
+    """Summarize total sales between sample data and genuine real sales."""
+    return sales_repository.get_sales_sources_summary(db)
 
 def get_sales_records(
     db: Session,

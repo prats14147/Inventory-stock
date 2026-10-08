@@ -20,6 +20,8 @@ import PageHeader from "../components/PageHeader";
 import Card from "../components/Card";
 import EmptyState from "../components/EmptyState";
 import PinButton from "../components/PinButton";
+import { downloadCsv, toCsv } from "../lib/csv";
+import { exportInventoryCsv } from "../services/api";
 
 const CATEGORIES = [
   "Furniture",
@@ -1778,6 +1780,40 @@ const [form, setForm] = useState({
               Low stock only (&lt; 50)
             </option>
           </select>
+
+          <button
+            type="button"
+            onClick={() => {
+              const headers = ["Product", "Name", "SKU", "Category", "Region", "Store", "Stock on Hand", "Unit Cost", "Units Ordered"];
+              downloadCsv(
+                `inventory-export-${new Date().toISOString().slice(0, 10)}.csv`,
+                toCsv(headers, sorted.map((row) => [
+                  row.product_id,
+                  productMap.get(row.product_id)?.name ?? "",
+                  productMap.get(row.product_id)?.sku ?? "",
+                  productMap.get(row.product_id)?.category ?? row.category,
+                  row.region,
+                  row.store_id,
+                  row.inventory_level,
+                  costByProduct.get(row.product_id) ?? "",
+                  row.units_ordered,
+                ]))
+              );
+            }}
+            disabled={sorted.length === 0}
+            className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+          >
+            Export view CSV
+          </button>
+
+          <button
+            type="button"
+            onClick={() => exportInventoryCsv({ category: category || undefined })}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            title="Server-side export of the full current inventory"
+          >
+            Export all (server)
+          </button>
         </div>
 
         {loading && (

@@ -9,8 +9,11 @@ import Sales from "./pages/Sales";
 import Forecast from "./pages/Forecast";
 import Stockout from "./pages/Stockout";
 import Reorder from "./pages/Reorder";
+import Live from "./pages/Live";
 import Chatbot from "./pages/Chatbot";
 import Watchlist from "./pages/Watchlist";
+import ModelHealth from "./pages/ModelHealth";
+import Settings from "./pages/Settings";
 import Login from "./pages/Login";
 import { getAccessToken, getCurrentUser, setAccessToken } from "./services/api";
 
@@ -49,7 +52,10 @@ export default function App() {
           <Route path="/forecast" element={<Forecast />} />
           <Route path="/stockout" element={<Stockout />} />
           <Route path="/reorder" element={<Reorder />} />
+          <Route path="/live" element={<Live />} />
           <Route path="/watchlist" element={<Watchlist />} />
+          <Route path="/model-health" element={<ModelHealth />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="/chat" element={<Chatbot />} />
         </Routes>
       </main>

@@ -6,6 +6,7 @@ import {
   ApiError,
   bulkImportSales,
   closeSalesDay,
+  exportSalesCsv,
   getCurrentInventory,
   getProductCosts,
   getSales,
@@ -63,6 +64,36 @@ export default function Sales() {
   // Sales Records Table filter state
   const [tableProductFilter, setTableProductFilter] = useState("");
   const [tableStoreFilter, setTableStoreFilter] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+
+  async function handleExportCsv() {
+    setExporting(true);
+    setExportError("");
+    try {
+      const blob = await exportSalesCsv({
+        ...apiFilterParams,
+        product_id: tableProductFilter || undefined,
+        store_id: tableStoreFilter || undefined,
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `sales-export-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (err) {
+      setExportError(err instanceof ApiError ? err.message : "CSV export failed.");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   // Calculate API filter params from sourceFilter
   const apiFilterParams = useMemo(() => {
@@ -99,9 +130,11 @@ export default function Sales() {
         ...apiFilterParams,
         product_id: tableProductFilter || undefined,
         store_id: tableStoreFilter || undefined,
-        limit: 50,
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+        limit: 100,
       }),
-    [apiFilterParams, tableProductFilter, tableStoreFilter, refreshKey]
+    [apiFilterParams, tableProductFilter, tableStoreFilter, startDate, endDate, refreshKey]
   );
 
   const stockRows = stock.data ?? [];
@@ -825,6 +858,45 @@ export default function Sales() {
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
+            <label className="flex items-center gap-1 text-xs text-gray-600">
+              From
+              <input
+                type="date"
+                value={startDate}
+                max={endDate || undefined}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="rounded-lg border border-gray-300 px-2 py-1 text-xs shadow-sm focus:border-brand-500 focus:outline-none"
+                aria-label="Filter sales from date"
+              />
+            </label>
+            <label className="flex items-center gap-1 text-xs text-gray-600">
+              To
+              <input
+                type="date"
+                value={endDate}
+                min={startDate || undefined}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="rounded-lg border border-gray-300 px-2 py-1 text-xs shadow-sm focus:border-brand-500 focus:outline-none"
+                aria-label="Filter sales to date"
+              />
+            </label>
+            {(startDate || endDate) && (
+              <button
+                type="button"
+                onClick={() => { setStartDate(""); setEndDate(""); }}
+                className="rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+              >
+                Clear dates
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              disabled={exporting}
+              className="rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+            >
+              {exporting ? "Exporting…" : "Export CSV"}
+            </button>
           </div>
         }
       >
@@ -891,6 +963,7 @@ export default function Sales() {
             </tbody>
           </table>
         </div>
+        {exportError && <p role="alert" className="mt-2 text-xs font-medium text-red-700">{exportError}</p>}
       </Card>
     </div>
   );

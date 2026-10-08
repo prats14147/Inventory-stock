@@ -9,32 +9,15 @@ Tests for separating genuine sales from synthetic sample data:
 """
 
 from datetime import date
-import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
-from app.database import SessionLocal
 from app.main import app
 from app.models import DailyInventory, DailySales, Product, Store
 from app.repositories import inventory_repository, sales_repository
 from app.services import forecast_service
 
 client = TestClient(app)
-
-
-@pytest.fixture(autouse=True)
-def clean_test_sales():
-    """Ensure any genuine test sales are cleaned up after each test."""
-    yield
-    db = SessionLocal()
-    try:
-        db.execute(delete(DailySales).where(DailySales.source != "Sample Data"))
-        # Clean up any test inventory snapshots beyond 2024-01-01
-        db.execute(delete(DailyInventory).where(DailyInventory.date > date(2024, 1, 1)))
-        db.commit()
-        sales_repository.clear_history_cache()
-    finally:
-        db.close()
 
 
 def test_manual_sale_marked_real_manual(db):
@@ -136,7 +119,7 @@ def test_bulk_csv_import_duplicate_detection_file_and_db(db):
     assert any("already found in row 2 of this file" in r for r in duplicate_reasons)
 
 
-def test_bulk_csv_import_validation_and_invalid_row_reporting():
+def test_bulk_csv_import_validation_and_invalid_row_reporting(db):
     """Reports invalid rows with exact row numbers and error descriptions."""
     csv_data = """date,store_id,product_id,units_sold,price,category,region,discount
 2025-04-01,INVALID_STORE,P0001,5,20.0,Clothing,North,0
@@ -309,7 +292,7 @@ def test_forecasting_does_not_mix_real_and_synthetic_data(db):
 
     # 1. Real sale (units_sold=99999, date=2025-07-01) must NOT be present
     assert not any(history_df["Units Sold"] == 99999)
-    assert history_df["Date"].max() == date(2024, 1, 1)
+    assert history_df["Date"].max().date() == date(2024, 1, 1)
 
     # 2. Test forecast endpoint response includes provenance and baseline warning
     r_fc = client.get("/api/forecast/P0001", params={"horizon": 14})

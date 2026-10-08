@@ -35,9 +35,12 @@ from app.routers import (
     health,
     inventory,
     live,
+    model_health,
     products,
+    purchase_orders,
     reorder,
     sales,
+    settings as settings_router,
     stockout,
     watchlist,
     ws,
@@ -144,6 +147,9 @@ app.include_router(ws.router)
 app.include_router(live.router)
 app.include_router(watchlist.router)
 app.include_router(dashboard.router)
+app.include_router(settings_router.router)
+app.include_router(model_health.router)
+app.include_router(purchase_orders.router)
 
 
 @app.get("/")

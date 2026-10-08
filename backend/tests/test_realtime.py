@@ -51,11 +51,18 @@ class RecordingHub(LiveEventHub):
 
 @pytest.fixture
 def realtime_db(db):
-    """A Postgres session that removes the realtime rows a test creates."""
+    """Rollback-scoped session plus max-id cleanup for the simulator's own writes.
+
+    The `db` fixture (conftest) rolls back everything written through the
+    test session. But SimulatorService.ticks write through their own
+    SessionLocal session on a separate connection, so those commits are NOT
+    covered by the rollback -- the max-id DELETE below removes exactly the
+    rows a test's ticks created, restoring the live tables for the next test.
+    """
     event_max = db.execute(select(func.coalesce(func.max(LiveSalesEvent.id), 0))).scalar_one()
     alert_max = db.execute(select(func.coalesce(func.max(StockoutAlert.id), 0))).scalar_one()
     yield db
-    db.rollback()
+    db.rollback()  # release any uncommitted state before the cleanup DELETEs
     db.execute(LiveSalesEvent.__table__.delete().where(LiveSalesEvent.id > event_max))
     db.execute(StockoutAlert.__table__.delete().where(StockoutAlert.id > alert_max))
     db.commit()
@@ -113,16 +120,26 @@ def test_tick_never_touches_the_analytical_tables(service, realtime_db):
 
 
 def test_live_units_sold_sums_only_that_product(service, realtime_db):
+    # The simulator commits through its own session outside the db-fixture
+    # rollback, so earlier tests may have left rows behind. Snapshot the
+    # per-product totals BEFORE the tick; the tick's contribution is the delta.
+    realtime_db.expire_all()
+    all_pids = [f"P{i:04d}" for i in range(1, 21)]
+    baseline = {pid: live_units_sold(realtime_db, pid) for pid in all_pids}
     tick = service.tick(events_per_tick=5)
-    product_id = tick.events[0]["product_id"]
-    expected = sum(e["units_sold"] for e in tick.events if e["product_id"] == product_id)
-    assert live_units_sold(realtime_db, product_id) == expected
+    realtime_db.expire_all()
+    for product_id in {e["product_id"] for e in tick.events}:
+        expected = sum(e["units_sold"] for e in tick.events if e["product_id"] == product_id)
+        assert live_units_sold(realtime_db, product_id) - baseline[product_id] == expected
 
 
 def test_alert_escalates_to_critical_and_is_verified(realtime_db):
     """A drain far larger than the recorded stock must raise CRITICAL, with
     every number in the message traceable to a query or the risk formula."""
-    product_id = "P0001"
+    # Unique product: the simulator commits through its own session outside the
+    # db-fixture rollback, so earlier tests may have left CRITICAL alerts for
+    # P0001 behind -- and the cooldown would suppress this one as a duplicate.
+    product_id = "P0003"
     realtime_db.add(
         LiveSalesEvent(
             event_time=_utcnow(),

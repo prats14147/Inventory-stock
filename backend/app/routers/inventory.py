@@ -133,6 +133,33 @@ def list_current_inventory(
     return [CurrentInventoryRow(**row) for row in rows]
 
 
+@router.get("/export/csv")
+def export_inventory_csv(
+    category: str | None = None,
+    region: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Export the current inventory listing as CSV."""
+    import csv
+    import io
+    from datetime import date as _date
+    from fastapi.responses import StreamingResponse
+
+    rows = inventory_repository.get_all_current_inventory(db, category=category, region=region)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Date", "Store ID", "Product ID", "Category", "Region", "Stock on Hand", "Units Ordered"])
+    for r in rows:
+        writer.writerow([r.get("date"), r.get("store_id"), r.get("product_id"), r.get("category"), r.get("region"), r.get("inventory_level"), r.get("units_ordered")])
+    output.seek(0)
+    filename = f"inventory_export_{_date.today().isoformat()}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @router.get("/low-stock", response_model=LowStockResponse)
 def low_stock(
     threshold: int | None = Query(

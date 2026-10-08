@@ -4,6 +4,7 @@
 // the active page reads instantly.
 
 import { NavLink } from "react-router-dom";
+import { AlertsBell } from "./AlertsDrawer";
 
 const links = [
   { to: "/", label: "Dashboard", end: true },
@@ -12,7 +13,10 @@ const links = [
   { to: "/forecast", label: "Forecast" },
   { to: "/stockout", label: "Stockout Risk" },
   { to: "/reorder", label: "Reorder" },
+  { to: "/live", label: "Live" },
   { to: "/watchlist", label: "Watchlist" },
+  { to: "/model-health", label: "Model Health" },
+  { to: "/settings", label: "Settings" },
   { to: "/chat", label: "Chatbot" },
 ];
 
@@ -42,6 +46,7 @@ export default function Nav({ onSignOut }: { onSignOut: () => void }) {
             {link.label}
           </NavLink>
         ))}
+        <AlertsBell />
         <button onClick={onSignOut} className="ml-auto shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900">Sign out</button>
       </div>
     </nav>

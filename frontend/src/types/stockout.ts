@@ -4,6 +4,10 @@ export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 
 export interface StockoutRiskResponse {
   product_id: string;
+  name: string;
+  sku: string;
+  category: string;
+  store_id: string | null;
   as_of_date: string;
   current_inventory: number;
   lead_time_days: number;

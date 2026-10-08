@@ -31,11 +31,47 @@ class NeedsAttentionItem(BaseModel):
     """One product that needs a decision today, worst risk first."""
 
     product_id: str
+    name: str
+    sku: str
+    category: str
     risk: RiskLevel
     current_inventory: float
     required_inventory: float
     recommended_reorder_quantity: float
     reason: str
+
+
+class LowStockItem(BaseModel):
+    """Low stock item for the dashboard preview."""
+
+    product_id: str
+    name: str
+    sku: str
+    category: str
+    store_id: str
+    inventory_level: int
+    threshold: int
+
+
+class SalesSparklinePoint(BaseModel):
+    """One point in the 7-day sales sparkline."""
+
+    date: date
+    units_sold: int
+
+
+class StockMovementFeedItem(BaseModel):
+    """Recent stock movement for the dashboard feed."""
+
+    product_id: str
+    name: str
+    store_id: str
+    movement_type: str
+    quantity_delta: int
+    quantity_before: int
+    quantity_after: int
+    reason: str
+    occurred_at: str
 
 
 class DashboardSummaryResponse(BaseModel):
@@ -47,9 +83,12 @@ class DashboardSummaryResponse(BaseModel):
     low_stock_threshold: int
     risk_counts: RiskCounts
     needs_attention: list[NeedsAttentionItem]
+    low_stock_preview: list[LowStockItem]
+    sales_sparkline: list[SalesSparklinePoint]
+    stock_movements_feed: list[StockMovementFeedItem]
     category_sales: list[CategorySalesSummary]
     top_products: list[ProductSalesRank]
-    # Wall-clock cost of building this payload, so the perf work stays visible.
+    # Wall-clock cost of building this payload, in ms.
     compute_ms: int
     # True when the risk rows came from the in-process cache rather than being
     # recomputed -- lets the UI show that a number is cached, never silently.

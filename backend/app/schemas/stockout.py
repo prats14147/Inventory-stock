@@ -14,6 +14,10 @@ class RiskLevel(str, Enum):
 
 class StockoutRiskResponse(BaseModel):
     product_id: str
+    name: str
+    sku: str
+    category: str
+    store_id: str | None = None
     as_of_date: date
     current_inventory: float
     lead_time_days: int

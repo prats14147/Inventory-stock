@@ -46,8 +46,8 @@ def get_product_inventory(db: Session, product_id: str, as_of: date | None = Non
 
 
 def get_low_stock(db: Session, threshold: int | None = None, as_of: date | None = None) -> LowStockResponse:
-    settings = get_settings()
-    effective_threshold = threshold if threshold is not None else settings.low_stock_threshold
+    from app.services.settings_service import effective_low_stock_threshold
+    effective_threshold = effective_low_stock_threshold(db, threshold)
 
     as_of_date = as_of or inventory_repository.get_latest_date(db)
     rows = inventory_repository.get_low_stock_rows(db, effective_threshold, as_of=as_of)
@@ -106,11 +106,13 @@ def adjust_stock(db: Session, payload: StockAdjustmentRequest, source: str = "in
     if payload.movement_type in {"DELIVERY", "RETURN"} and payload.quantity_delta < 0:
         raise InvalidRequestError(f"{payload.movement_type} quantity must be positive.")
     if payload.movement_type == "DELIVERY":
-        # A receipt always adds the physically received units to on-hand stock.
-        # Units ordered is an outstanding-order count, not a cap on what can
-        # physically arrive; over-deliveries are allowed and the remainder is
-        # floored at zero rather than making the outstanding quantity negative.
-        row.units_ordered = max(0, row.units_ordered - payload.quantity_delta)
+        # A receipt adds physically received units to on-hand stock and reduces
+        # the outstanding order count by the received amount. If the receipt
+        # exceeds the outstanding orders, block it: "Only {row.units_ordered}
+        # units are currently ordered".
+        if payload.quantity_delta > row.units_ordered:
+            raise InvalidRequestError(f"Only {row.units_ordered} units are currently ordered")
+        row.units_ordered -= payload.quantity_delta
     row.inventory_level = after
     db.add(StockMovement(
         occurred_at=datetime.now(), business_date=as_of, store_id=payload.store_id,

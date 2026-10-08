@@ -207,8 +207,31 @@ export const getSales = (
     source?: string;
     genuine_only?: boolean;
     limit?: number;
+    offset?: number;
   } = {}
 ) => request<DailySaleRow[]>(`/api/sales${qs(params)}`);
+
+export const exportSalesCsv = (
+  params: {
+    product_id?: string;
+    store_id?: string;
+    category?: string;
+    start_date?: string;
+    end_date?: string;
+    source?: string;
+    genuine_only?: boolean;
+  } = {}
+) => {
+  const queryString = qs(params);
+  return fetch(`${API_BASE_URL}/api/sales/export/csv${queryString}`, {
+    headers: {
+      Authorization: `Bearer ${getAccessToken()}`,
+    },
+  }).then((res) => {
+    if (!res.ok) throw new ApiError(res.status, "Failed to export CSV");
+    return res.blob();
+  });
+};
 
 export const recordSale = (payload: {
   product_id: string;
@@ -302,16 +325,56 @@ export const getForecast = (productId: string, horizon?: number) =>
   request<ForecastResponse>(`/api/forecast/${productId}${qs({ horizon })}`);
 
 // --- Stockout risk ---
-export const getStockoutRiskList = (onlyAtRisk = false) =>
-  request<StockoutRiskResponse[]>(`/api/stockout-risk${qs({ only_at_risk: onlyAtRisk })}`);
-export const getStockoutRisk = (productId: string, leadTimeDays?: number) =>
-  request<StockoutRiskResponse>(`/api/stockout-risk/${productId}${qs({ lead_time_days: leadTimeDays })}`);
+export interface RiskListParams {
+  onlyAtRisk?: boolean;
+  store_id?: string;
+  search?: string;
+  category?: string;
+  limit?: number;
+  offset?: number;
+}
+export const getStockoutRiskList = (onlyAtRiskOrParams: boolean | RiskListParams = false) => {
+  const params: Record<string, string | number | boolean | undefined> =
+    typeof onlyAtRiskOrParams === "boolean"
+      ? { only_at_risk: onlyAtRiskOrParams }
+      : {
+          only_at_risk: onlyAtRiskOrParams.onlyAtRisk,
+          store_id: onlyAtRiskOrParams.store_id,
+          search: onlyAtRiskOrParams.search,
+          category: onlyAtRiskOrParams.category,
+          limit: onlyAtRiskOrParams.limit,
+          offset: onlyAtRiskOrParams.offset,
+        };
+  return request<StockoutRiskResponse[]>(`/api/stockout-risk${qs(params)}`);
+};
+export const getStockoutRisk = (productId: string, leadTimeDays?: number, storeId?: string) =>
+  request<StockoutRiskResponse>(`/api/stockout-risk/${productId}${qs({ lead_time_days: leadTimeDays, store_id: storeId })}`);
 
 // --- Reorder ---
-export const getReorderList = (onlyNeeded = false) =>
-  request<ReorderResponse[]>(`/api/reorder${qs({ only_needed: onlyNeeded })}`);
-export const getReorder = (productId: string, leadTimeDays?: number) =>
-  request<ReorderResponse>(`/api/reorder/${productId}${qs({ lead_time_days: leadTimeDays })}`);
+export interface ReorderListParams {
+  onlyNeeded?: boolean;
+  store_id?: string;
+  search?: string;
+  category?: string;
+  limit?: number;
+  offset?: number;
+}
+export const getReorderList = (onlyNeededOrParams: boolean | ReorderListParams = false) => {
+  const params: Record<string, string | number | boolean | undefined> =
+    typeof onlyNeededOrParams === "boolean"
+      ? { only_needed: onlyNeededOrParams }
+      : {
+          only_needed: onlyNeededOrParams.onlyNeeded,
+          store_id: onlyNeededOrParams.store_id,
+          search: onlyNeededOrParams.search,
+          category: onlyNeededOrParams.category,
+          limit: onlyNeededOrParams.limit,
+          offset: onlyNeededOrParams.offset,
+        };
+  return request<ReorderResponse[]>(`/api/reorder${qs(params)}`);
+};
+export const getReorder = (productId: string, leadTimeDays?: number, storeId?: string) =>
+  request<ReorderResponse>(`/api/reorder/${productId}${qs({ lead_time_days: leadTimeDays, store_id: storeId })}`);
 
 // --- Chat (Phase 11 conversation memory + Tier 1 streaming) ---
 export const postChat = (message: string, session_id?: string | null) =>
@@ -356,9 +419,106 @@ export const startSimulator = (tickSeconds?: number, eventsPerTick?: number) =>
 export const stopSimulator = () =>
   request<{ stopped: boolean } & SimulatorStatus>("/api/simulator/stop", { method: "POST" });
 
+// --- CSV exports (download the exact filtered view) ---
+function downloadBlob(filename: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function fetchBlob(path: string): Promise<Blob> {
+  const token = getAccessToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}${path}`, { headers });
+  } catch {
+    throw new ApiError(0, `Cannot reach the InventoryAI API at ${API_BASE_URL}.`);
+  }
+  if (!res.ok) throw new ApiError(res.status, "CSV export failed.");
+  return res.blob();
+}
+
+export const exportInventoryCsv = async (params: { category?: string; region?: string } = {}) => {
+  const blob = await fetchBlob(`/api/inventory/export/csv${qs(params)}`);
+  downloadBlob(`inventory-export-${new Date().toISOString().slice(0, 10)}.csv`, blob);
+};
+
+export const exportStockoutCsv = async (items: StockoutRiskResponse[]) => {
+  const { toCsv, downloadCsv } = await import("../lib/csv");
+  const headers = ["Product", "Name", "SKU", "Category", "Store", "Current inventory", "Forecast demand", "Safety stock", "Required", "Risk"];
+  downloadCsv(
+    `stockout-risk-${new Date().toISOString().slice(0, 10)}.csv`,
+    toCsv(headers, items.map((r) => [r.product_id, r.name, r.sku, r.category, r.store_id ?? "all", r.current_inventory.toFixed(0), r.forecast_lead_time_demand.toFixed(1), r.safety_stock.toFixed(1), r.required_inventory.toFixed(1), r.risk]))
+  );
+};
+
 // --- Dashboard (Tier A) ---
 /** The whole dashboard in one request. Replaces five parallel calls. */
 export const getDashboardSummary = () => request<DashboardSummary>("/api/dashboard/summary");
+
+// --- Settings (admin ops knobs) ---
+export interface SystemSettingsResponse {
+  settings: Record<string, { value: number; source: string; default: number; description: string }>;
+}
+export const getSystemSettings = () => request<SystemSettingsResponse>("/api/settings");
+export const updateSystemSettings = (payload: { default_lead_time_days?: number; safety_stock_service_factor?: number; low_stock_threshold?: number }) =>
+  request<SystemSettingsResponse>("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
+
+// --- Model health ---
+export interface ModelHorizonHealth {
+  horizon_days: number;
+  model: string;
+  baseline: string;
+  mae: number;
+  rmse: number;
+  smape: number;
+  test_rows: number;
+  baseline_mae: number;
+  baseline_rmse: number;
+  baseline_smape: number;
+  improvement_pct_vs_baseline: number | null;
+  train_rows: number;
+  val_rows: number;
+  train_date_cutoff: string;
+  val_date_cutoff: string;
+  best_iteration: number;
+  feature_count: number;
+  feature_columns: string[];
+}
+export interface ModelHealthResponse {
+  artifacts_dir: string;
+  artifacts_found: boolean;
+  horizons: ModelHorizonHealth[];
+  note: string;
+}
+export const getModelHealth = () => request<ModelHealthResponse>("/api/model-health");
+
+// --- Purchase orders ---
+export interface PurchaseOrder {
+  id: number;
+  product_id: string;
+  store_id: string;
+  quantity: number;
+  status: string;
+  note: string;
+  created_at: string | null;
+  received_at: string | null;
+}
+export const listPurchaseOrders = (status?: string) =>
+  request<{ count: number; orders: PurchaseOrder[] }>(`/api/purchase-orders${qs({ status })}`);
+export const createPurchaseOrder = (payload: { product_id: string; store_id: string; quantity: number; note?: string }) =>
+  request<PurchaseOrder>("/api/purchase-orders", { method: "POST", body: JSON.stringify(payload) });
+export const receivePurchaseOrder = (id: number) =>
+  request<{ order: PurchaseOrder; delivery: unknown }>(`/api/purchase-orders/${id}/receive`, { method: "POST" });
+export const cancelPurchaseOrder = (id: number) =>
+  request<PurchaseOrder>(`/api/purchase-orders/${id}/cancel`, { method: "POST" });
 
 // --- Watchlist (pinned products) ---
 export const getWatchlist = () => request<WatchlistListResponse>("/api/watchlist");

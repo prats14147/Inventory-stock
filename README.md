@@ -1,7 +1,7 @@
 # Inventory Intelligence System (InventoryAI)
 
-> Status: **Phase 10 of 12 complete — Integration.** Sections below are
-> filled in as each phase lands.
+> Status: **Phase 12 of 12 complete — Documentation & full-frontend pass.**
+> All sections below are filled in.
 
 ## Project Overview
 Retail inventory intelligence app combining inventory/sales analytics,
@@ -10,13 +10,52 @@ natural-language chatbot interface backed by real database/ML calculations
 (never invented numbers).
 
 ## Problem Statement
-_(added in Phase 12 documentation pass)_
+Retail teams juggle thousands of store-product combinations with stale
+spreadsheets and gut feel: which items will stock out before the next delivery,
+how much to reorder, whether a sales dip is real demand or just an empty shelf,
+and what the numbers actually say when someone asks in plain English. This
+project answers those questions from one PostgreSQL source of truth, with every
+figure produced by a documented formula or a saved ML model — never invented by
+the chatbot layer.
 
 ## Objectives
-_(added in Phase 12 documentation pass)_
+- **Single source of truth**: inventory, sales, forecasts, risk, and reorder
+  figures all read from PostgreSQL; the API never re-reads the raw CSV.
+- **Honest numbers**: deterministic operations formulas with their assumptions
+  echoed in every response; ML metrics reported against a naive baseline with
+  leakage guards enforced by automated tests.
+- **Genuine vs. sample separation**: manually recorded and CSV-imported sales
+  are labeled `Real · Manual` / `Real · CSV Import` in the database and kept out
+  of the synthetic training pipeline.
+- **Real-time awareness**: a WebSocket live layer (sales ticker, proactive
+  stockout alerts, streaming chat) that never mutates analytical tables.
+- **Operable**: admin-tunable policy knobs (lead time, safety-stock factor,
+  low-stock threshold) in PostgreSQL, purchase-order flow from recommendation
+  to delivery, and model-health visibility.
 
 ## Features
-_(added in Phase 12 documentation pass)_
+- **Dashboard** (`/`): needs-attention triage (clickable to `/stockout`),
+  KPI cards, risk-tier donut, low-stock preview, 7-day sales sparkline, recent
+  stock-movements feed, top products and category charts — all in one request.
+- **Inventory** (`/inventory`): searchable/sortable store-product grid with
+  product names/SKUs, delivery/return/correction ledger, CSV export.
+- **Sales** (`/sales`): manual sale recording, bulk CSV import with
+  duplicate/invalid detection, source filters, date-range pickers, trend and
+  breakdown charts, store P&L, CSV export.
+- **Forecast** (`/forecast`): XGBoost per-store demand at 7/14 days, plus
+  side-by-side two-product compare mode.
+- **Stockout Risk** (`/stockout`): HIGH/MEDIUM/LOW engine with search,
+  category filter, store-level scope (S001–S005), and CSV export.
+- **Reorder** (`/reorder`): recommended quantities with search/category/store
+  filters, CSV export, and a **Create PO** flow (draft → DELIVERY on receipt).
+- **Live** (`/live`): WebSocket sales ticker, simulator controls, alert feed
+  with acknowledge; a 🔔 **alerts drawer** is available on every page.
+- **Model Health** (`/model-health`): test MAE/RMSE/sMAPE vs. baseline,
+  splits, and feature lists from the saved artifacts.
+- **Settings** (`/settings`): edit lead time, safety-stock factor, and
+  low-stock threshold (PostgreSQL-backed, effective immediately).
+- **Chatbot** (`/chat`): natural-language stock/sales/forecast/risk/reorder
+  questions with streaming responses, grounded in verified backend results.
 
 ## Architecture
 ```
@@ -185,8 +224,10 @@ Layered as `Router -> Service -> Repository -> Database`.
   Installation section below for the exact commands to verify locally.
 
 ## Frontend (Phase 9)
-- React + TypeScript + Vite + Tailwind CSS, with 7 pages: Dashboard,
-  Inventory, Sales, Forecast, Stockout Risk, Reorder, Chatbot.
+- React + TypeScript + Vite + Tailwind CSS, with 11 pages: Dashboard,
+  Inventory, Sales, Forecast (with compare mode), Stockout Risk, Reorder
+  (with purchase orders), Live, Watchlist, Model Health, Settings, Chatbot —
+  plus a global alerts drawer.
 - `frontend/src/types/` mirrors the backend's Pydantic schemas
   field-for-field; `frontend/src/services/api.ts` is the single place
   every HTTP call goes through (spec sections 44-45).
@@ -372,11 +413,12 @@ Set `SIMULATOR_ENABLED=true` to have the ticker start with the API instead.
 ```bash
 pytest backend/tests/ tests/
 ```
-138 tests passing: analytics services, ML artifacts, stockout/reorder, the
-NLP/chat pipeline (rules + LLM fallback), conversation memory, full API
-integration via FastAPI's TestClient, **WebSocket streaming chat**, and the
-**real-time layer** (simulator, alert engine, live hub, live REST/WebSocket
-endpoints).
+218 tests passing (212 backend + 6 ML artifacts): analytics services, ML
+artifacts, stockout/reorder, the NLP/chat pipeline (rules + LLM fallback),
+conversation memory, full API integration via FastAPI's TestClient,
+**WebSocket streaming chat**, and the **real-time layer** (simulator, alert
+engine, live hub, live REST/WebSocket endpoints). Tests run in rolled-back
+transactions, so they never leak into the dev database.
 
 ## Limitations
 See `docs/limitations.md` — covers synthetic-data caveats, the
@@ -385,4 +427,15 @@ stockouts, forecasting leakage-safety assumptions, the lead-time/
 safety-stock assumptions, and the NLP network-testing limitation.
 
 ## Future Improvements
-_(added in Phase 12)_
+- **Per-store forecasting**: train store-level models instead of apportioning
+  the product total evenly for store-scoped risk/reorder.
+- **Multi-user roles**: user table with read-only/editor/admin roles instead of
+  a single operator account.
+- **Multi-worker live hub**: publish live frames through Redis pub/sub (or
+  Postgres `LISTEN/NOTIFY`) so the stream survives multiple uvicorn workers.
+- **Real supplier data**: replace the `DEFAULT_LEAD_TIME_DAYS` assumption with
+  measured supplier SLAs and per-product lead times.
+- **Costed history backfill**: capture unit costs for imported sales so profit
+  reporting covers the full history, not just newly recorded sales.
+- **Browser end-to-end tests**: automated click-through of the streaming UI
+  (no browser automation was available in the build environment).

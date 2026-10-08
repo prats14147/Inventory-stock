@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
   Legend,
   Line,
@@ -57,6 +59,8 @@ export default function Forecast() {
   const linkedProduct = searchParams.get("product") ?? "";
 
   const [productId, setProductId] = useState(linkedProduct);
+  const [compareId, setCompareId] = useState("");
+  const [compareOn, setCompareOn] = useState(false);
   const [horizon, setHorizon] = useState(14);
 
   useEffect(() => {
@@ -105,6 +109,29 @@ export default function Forecast() {
 
   const selectedForecast =
     horizon === 7 ? forecast7.data : forecast14.data;
+
+  // Side-by-side compare mode: second product at the selected horizon.
+  const compareForecast = useApi(
+    () =>
+      compareOn && compareId && compareId !== productId
+        ? getForecast(compareId, horizon)
+        : Promise.resolve(null),
+    [compareOn, compareId, productId, horizon]
+  );
+
+  const compareRows = (() => {
+    const leftData = selectedForecast;
+    const rightData = compareForecast.data;
+    if (!leftData || !rightData) return [];
+    const left = new Map(leftData.per_store.map((r) => [r.store_id, r.forecast_units]));
+    const right = new Map(rightData.per_store.map((r) => [r.store_id, r.forecast_units]));
+    const stores = Array.from(new Set([...left.keys(), ...right.keys()])).sort();
+    return stores.map((store_id) => ({
+      store_id,
+      [leftData.product_id]: Number((left.get(store_id) ?? 0).toFixed(1)),
+      [rightData.product_id]: Number((right.get(store_id) ?? 0).toFixed(1)),
+    }));
+  })();
 
   const forecastError =
     forecast7.error ?? forecast14.error ?? history.error;
@@ -260,6 +287,41 @@ export default function Forecast() {
               <option value={14}>14 days</option>
             </select>
           </label>
+
+          <label className="flex cursor-pointer items-center gap-2 self-center rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-600 shadow-sm">
+            <input
+              type="checkbox"
+              checked={compareOn}
+              onChange={(e) => setCompareOn(e.target.checked)}
+              className="accent-brand-600"
+            />
+            Compare two products
+          </label>
+
+          {compareOn && (
+            <label className="flex flex-col text-sm font-medium text-gray-700">
+              Compare with
+
+              <select
+                className="mt-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 shadow-sm focus:border-brand-500 focus:outline-none"
+                value={compareId}
+                onChange={(e) => setCompareId(e.target.value)}
+              >
+                <option value="">Select a product...</option>
+
+                {products.data?.products
+                  .filter((product) => product.product_id !== productId)
+                  .map((product) => (
+                    <option
+                      key={product.product_id}
+                      value={product.product_id}
+                    >
+                      {product.product_id} — {product.name} ({product.sku})
+                    </option>
+                  ))}
+              </select>
+            </label>
+          )}
         </div>
       </Card>
 
@@ -448,6 +510,66 @@ export default function Forecast() {
               />
             )}
           </div>
+
+          {compareOn && selectedForecast && (
+            <Card
+              title="Side-by-side comparison"
+              subtitle={
+                compareForecast.data
+                  ? `${selectedForecast.product_id} (${selectedForecast.forecast_total_units.toFixed(0)} units) vs ${compareForecast.data.product_id} (${compareForecast.data.forecast_total_units.toFixed(0)} units)`
+                  : "Pick a second product above to compare per-store demand."
+              }
+            >
+              {compareForecast.loading && <LoadingState label="Forecasting comparison..." />}
+              {compareForecast.error && <ErrorState message={compareForecast.error} />}
+              {!compareId || compareId === productId ? (
+                <EmptyState
+                  title="Select a different second product."
+                  hint="Comparison needs two distinct products at the same horizon."
+                />
+              ) : compareForecast.data ? (
+                <ResponsiveContainer width="100%" height={260}>
+                  <BarChart data={compareRows}>
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#e5e7eb"
+                    />
+                    <XAxis
+                      dataKey="store_id"
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={{ stroke: "#e5e7eb" }}
+                    />
+                    <YAxis
+                      fontSize={12}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={(v: number) =>
+                        v.toLocaleString()
+                      }
+                    />
+                    <Tooltip
+                      formatter={(v) => [
+                        `${Number(v).toLocaleString()} units`,
+                        "Forecast",
+                      ]}
+                      cursor={{ fill: "#eff6ff" }}
+                    />
+                    <Bar
+                      dataKey={selectedForecast.product_id}
+                      fill="#2563eb"
+                      radius={[6, 6, 0, 0]}
+                    />
+                    <Bar
+                      dataKey={compareForecast.data.product_id}
+                      fill="#16a34a"
+                      radius={[6, 6, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : null}
+            </Card>
+          )}
         </div>
       )}
     </div>

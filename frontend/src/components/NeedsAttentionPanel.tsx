@@ -84,7 +84,12 @@ export default function NeedsAttentionPanel({ items, loading, error, asOfDate, c
           <li key={`live-${alert.id}`} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold text-gray-900">{alert.product_id}</span>
+                <Link
+                  to={`/stockout?product=${alert.product_id}`}
+                  className="font-semibold text-gray-900 hover:underline"
+                >
+                  {alert.product_id}
+                </Link>
                 <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800 ring-1 ring-inset ring-red-600/20">
                   <span className="h-1.5 w-1.5 rounded-full bg-red-500" /> Live critical
                 </span>
@@ -93,12 +98,12 @@ export default function NeedsAttentionPanel({ items, loading, error, asOfDate, c
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               <PinButton productId={alert.product_id} />
-              <a
-                href="#live-operations"
+              <Link
+                to="/live"
                 className="rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
               >
                 Handle
-              </a>
+              </Link>
             </div>
           </li>
         ))}
@@ -107,7 +112,13 @@ export default function NeedsAttentionPanel({ items, loading, error, asOfDate, c
           <li key={item.product_id} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold text-gray-900">{item.product_id}</span>
+                <Link
+                  to={`/stockout?product=${item.product_id}`}
+                  className="font-semibold text-gray-900 hover:underline"
+                >
+                  {item.name}
+                </Link>
+                <span className="text-xs text-gray-500">({item.product_id})</span>
                 <RiskBadge risk={item.risk} />
                 <span className="text-xs text-gray-500">
                   short by{" "}

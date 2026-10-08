@@ -309,6 +309,7 @@ def list_sales(
     source: str | None = Query(None, description="Filter by source e.g. 'Real · Manual', 'Real · CSV Import', or 'Sample Data'"),
     genuine_only: bool = Query(False, description="Filter to only genuine sales (Real · Manual and Real · CSV Import)"),
     limit: int = Query(100, ge=1, le=1000, description="Max rows to return"),
+    offset: int = Query(0, ge=0, description="Number of rows to skip"),
     db: Session = Depends(get_db),
 ):
     rows = sales_repository.get_sales_rows(
@@ -320,9 +321,11 @@ def list_sales(
         end_date=end_date,
         source=source,
         genuine_only=genuine_only,
+        limit=limit,
+        offset=offset,
     )
 
-    return [DailySaleRow.model_validate(r) for r in rows[:limit]]
+    return [DailySaleRow.model_validate(r) for r in rows]
 
 
 @router.get("/top-products", response_model=TopProductsResponse)
@@ -449,4 +452,56 @@ def profitability(
         db, group_by=group_by, sort_order=sort_order, store_id=store_id,
         product_id=product_id, category=category, start_date=start_date,
         end_date=end_date,
+    )
+
+
+@router.get("/export/csv")
+def export_sales_csv(
+    product_id: str | None = None,
+    store_id: str | None = None,
+    category: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    source: str | None = Query(None, description="Filter by source"),
+    genuine_only: bool = Query(False, description="Filter to only genuine sales"),
+    db: Session = Depends(get_db),
+):
+    """Export sales records as CSV."""
+    rows = sales_repository.get_sales_rows(
+        db,
+        product_id=product_id,
+        store_id=store_id,
+        category=category,
+        start_date=start_date,
+        end_date=end_date,
+        source=source,
+        genuine_only=genuine_only,
+    )
+
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Date", "Store ID", "Product ID", "Category", "Region",
+        "Units Sold", "Price", "Discount", "Holiday/Promotion",
+        "Weather Condition", "Competitor Pricing", "Seasonality",
+        "Demand Forecast Reference", "Possible Stock Constrained", "Source"
+    ])
+    for r in rows:
+        writer.writerow([
+            r.date, r.store_id, r.product_id, r.category, r.region,
+            r.units_sold, r.price, r.discount, r.holiday_promotion,
+            r.weather_condition, r.competitor_pricing, r.seasonality,
+            r.demand_forecast_reference, r.possible_stock_constrained, r.source
+        ])
+
+    output.seek(0)
+    filename = f"sales_export_{date.today().isoformat()}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
     )

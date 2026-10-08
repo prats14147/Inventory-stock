@@ -114,8 +114,7 @@ def _apply_source_filter(stmt, source: str | None = None, genuine_only: bool = F
     return stmt
 
 
-def get_sales_rows(
-    db: Session,
+def _sales_filter_stmt(
     product_id: str | None = None,
     store_id: str | None = None,
     category: str | None = None,
@@ -123,7 +122,7 @@ def get_sales_rows(
     end_date: date | None = None,
     source: str | None = None,
     genuine_only: bool = False,
-) -> list[DailySales]:
+):
     stmt = select(DailySales)
     if product_id:
         stmt = stmt.where(DailySales.product_id == product_id)
@@ -136,7 +135,50 @@ def get_sales_rows(
     if end_date:
         stmt = stmt.where(DailySales.date <= end_date)
     stmt = _apply_source_filter(stmt, source=source, genuine_only=genuine_only)
+    return stmt
+
+
+def count_sales_rows(
+    db: Session,
+    product_id: str | None = None,
+    store_id: str | None = None,
+    category: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    source: str | None = None,
+    genuine_only: bool = False,
+) -> int:
+    stmt = _sales_filter_stmt(
+        product_id=product_id, store_id=store_id, category=category,
+        start_date=start_date, end_date=end_date, source=source,
+        genuine_only=genuine_only,
+    )
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    return int(db.execute(count_stmt).scalar_one())
+
+
+def get_sales_rows(
+    db: Session,
+    product_id: str | None = None,
+    store_id: str | None = None,
+    category: str | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    source: str | None = None,
+    genuine_only: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[DailySales]:
+    stmt = _sales_filter_stmt(
+        product_id=product_id, store_id=store_id, category=category,
+        start_date=start_date, end_date=end_date, source=source,
+        genuine_only=genuine_only,
+    )
     stmt = stmt.order_by(DailySales.date.desc(), DailySales.product_id)
+    if offset:
+        stmt = stmt.offset(offset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
     return list(db.execute(stmt).scalars().all())
 
 
