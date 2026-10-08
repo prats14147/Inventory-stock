@@ -25,6 +25,7 @@ class Intent(str, Enum):
     RECEIVE_STOCK = "RECEIVE_STOCK"
     ADJUST_STOCK = "ADJUST_STOCK"
     HELP = "HELP"
+    GREETING = "GREETING"
     UNKNOWN = "UNKNOWN"
 
 

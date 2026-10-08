@@ -44,11 +44,13 @@ CASES = [
      lambda r: r.data is not None and r.data["verdict_product_id"] in {"P0001", "P0002"}),
     ("Compare blender and headphones", Intent.PRODUCT_COMPARE,
      lambda r: r.data is not None and {item["product_id"] for item in r.data["products"]} == {"P0007", "P0001"}),
-    # Unknown stays unknown and never fabricates.
+    ("what needs to be rstocked", Intent.LOW_STOCK,
+     lambda r: r.data is not None),
+    # Unknown stays unknown, stays short, and never fabricates.
     ("How much stock does P9999 have?", None,
      lambda r: r.data is None),
     ("asdkjasd random gibberish", Intent.UNKNOWN,
-     lambda r: r.data is None),
+     lambda r: r.data is None and len(r.message) < 200),
 ]
 
 
@@ -71,6 +73,7 @@ def test_chat_feedback_round_trip(db):
     import app.main as main
     from app.database import get_db
     from app.database import SessionLocal
+    from app.services.chat_service import set_chat_session_manager
 
     main.require_request_identity = lambda req: "admin"
     main.app.dependency_overrides[get_db] = lambda: SessionLocal()
@@ -92,3 +95,8 @@ def test_chat_feedback_round_trip(db):
         assert missing.status_code == 404
     finally:
         main.app.dependency_overrides.pop(get_db, None)
+        # The TestClient path installs a REAL-LLM manager globally; drop it
+        # so later tests get the deterministic rules-only manager again.
+        # Without this, test order changes results (and the suite hits the
+        # network).
+        set_chat_session_manager(None)

@@ -32,7 +32,7 @@ class Settings(BaseSettings):
 
     # LLM (Groq, retained for users who still use Groq)
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-20b"
 
     # Forecasting
     default_forecast_horizon: int = 14
