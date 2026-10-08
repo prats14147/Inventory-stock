@@ -14,6 +14,7 @@ import json
 import pytest
 
 from app.nlp import parser
+from app.nlp.entities import Entities
 from app.nlp.intent import Intent
 from app.nlp.llm_client import LLMUnavailableError
 from app.nlp.rules import classify_intent, extract_entities, is_stock_write_request
@@ -45,6 +46,17 @@ from app.services.chat_service import _is_pending_sale_reply, handle_chat_messag
         ("Break down sales by category", Intent.CATEGORY_ANALYSIS),
         ("Break down sales by store", Intent.STORE_ANALYSIS),
         ("What can you help with?", Intent.HELP),
+        # "in demand" phrasings must classify deterministically even when the
+        # LLM planner is down (Groq daily rate limit, no network) -- otherwise
+        # they fall through to the UNKNOWN fallback.
+        ("whats in demand", Intent.TOP_SELLING),
+        ("what's in demand", Intent.TOP_SELLING),
+        ("what product is in demand", Intent.TOP_SELLING),
+        ("what are in demand", Intent.TOP_SELLING),
+        ("which products are in demand right now", Intent.TOP_SELLING),
+        ("what are ind emand?", Intent.TOP_SELLING),  # typo normalization
+        ("what products is in stock", Intent.CURRENT_STOCK),
+        ("demand for P0001 next week", Intent.DEMAND_FORECAST),
         ("asdkjaslkdj random gibberish", Intent.UNKNOWN),
     ],
 )
@@ -56,6 +68,56 @@ def test_rule_based_entity_extraction_product_and_horizon():
     entities = extract_entities("forecast for the next 7 days for P0005")
     assert entities.product_id == "P0005"
     assert entities.forecast_horizon == 7
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "what product is in demand",
+        "what product is in stock",
+        "which items are low on stock",
+    ],
+)
+def test_function_words_after_product_are_not_product_references(message):
+    """`product is ...` must not capture 'is' as a product name -- it would
+    route into catalog resolution and answer "I can't match 'is'..." instead
+    of answering the ranking question."""
+    entities = extract_entities(message)
+    assert entities.product_reference is None
+
+
+@pytest.mark.parametrize(
+    "message,expected_intent",
+    [
+        # Fuzzy signal fallback: novel phrasings that match no exact phrase
+        # still route when the LLM planner is down (Groq quota / offline).
+        ("what the one product most sellig one", Intent.TOP_SELLING),
+        ("which product moves the fastest", Intent.TOP_SELLING),
+        ("what items are flying off the shelves", Intent.TOP_SELLING),
+        ("tell me our worst performing sku", Intent.BOTTOM_SELLING),
+        ("how has stock been trending lately", Intent.SALES_TREND),
+        ("how did we do last month", Intent.SALES_TREND),
+        ("when did we last restock", Intent.LOW_STOCK),
+    ],
+)
+def test_fuzzy_signal_fallback_classifies_novel_phrasings(message, expected_intent):
+    assert classify_intent(message) == expected_intent
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "asdkjasd random gibberish",
+        "tell me something",
+        "what about the other one",
+        "how are you today",
+    ],
+)
+def test_fuzzy_signal_fallback_keeps_weak_messages_unknown(message):
+    """Weak/ambiguous wording must stay UNKNOWN: a wrong intent answers the
+    wrong question, UNKNOWN invites a rephrase."""
+    assert classify_intent(message) == Intent.UNKNOWN
+
 
 
 def test_rule_based_entity_extraction_category():
@@ -635,3 +697,160 @@ def test_chat_compare_draft_follow_up_store(db):
     assert second.data["compare_status"] == "draft_created"
     assert second.data["purchase_order"]["store_id"] == "S001"
     assert db.get(PurchaseOrder, second.data["purchase_order"]["id"]) is not None
+
+
+# --- Restock questions are reads, never writes -----------------------------
+
+def test_restock_question_lists_low_stock(db):
+    r = handle_chat_message(db, "what needs to be restocked")
+    assert r.intent == Intent.LOW_STOCK
+    assert r.data is not None
+
+
+def test_restock_question_with_typo_lists_low_stock(db):
+    r = handle_chat_message(db, "what nees to be restocked")
+    assert r.intent == Intent.LOW_STOCK
+    assert r.data is not None
+
+
+def test_restock_question_never_enters_write_flow(db):
+    r = handle_chat_message(db, "what should I restock")
+    assert r.intent == Intent.LOW_STOCK
+    assert "How many units should I change" not in r.message
+
+
+def test_real_delivery_still_records(db):
+    r = handle_chat_message(db, "received 10 units of P0001 at S001")
+    assert r.intent in {Intent.RECEIVE_STOCK, Intent.ADJUST_STOCK}
+
+
+# --- Greetings get manners, not lectures -----------------------------------
+
+def test_greeting_replies_short(db):
+    r = handle_chat_message(db, "hi")
+    assert r.intent == Intent.GREETING
+    assert r.data is None
+    assert len(r.message) < 150
+
+
+def test_thanks_and_goodbye(db):
+    assert "welcome" in handle_chat_message(db, "thank you").message.lower()
+    assert "goodbye" in handle_chat_message(db, "bye").message.lower()
+
+
+def test_greeting_with_question_stays_a_question(db):
+    r = handle_chat_message(db, "hi, how much stock for P0001?")
+    assert r.intent == Intent.CURRENT_STOCK
+    assert r.data is not None
+
+
+# --- Product names rendered alongside P-codes -------------------------------
+
+def test_product_label_format():
+    from app.services.chat_service import _product_label
+
+    assert _product_label("P0001", "Wireless Headphones") == "Wireless Headphones (P0001)"
+    assert _product_label("P0001", None) == "P0001"
+    assert _product_label("P0001", "  ") == "P0001"
+    assert _product_label("P0001", "Wireless Headphones", "40 on hand") == (
+        "Wireless Headphones (P0001, 40 on hand)"
+    )
+    assert _product_label("P0001", None, "40 on hand") == "P0001 (40 on hand)"
+
+
+def test_template_stock_answer_uses_product_name():
+    from app.services.chat_service import _template_response
+
+    data = {
+        "product_id": "P0001",
+        "product_name": "Wireless Headphones",
+        "total_inventory": 1573.0,
+        "as_of_date": "2025-12-31",
+        "stores": [{"store_id": "S001"}],
+    }
+    out = _template_response(Intent.CURRENT_STOCK, Entities(), data)
+    assert "Wireless Headphones (P0001)" in out
+    assert "1573 units" in out
+
+
+def test_template_top_selling_uses_product_name():
+    from app.services.chat_service import _template_response
+
+    data = {
+        "products": [
+            {"product_id": "P0002", "product_name": "Cotton T-Shirt", "total_units_sold": 99.0},
+            {"product_id": "P0003", "total_units_sold": 50.0},
+        ],
+        "start_date": None,
+        "end_date": None,
+    }
+    out = _template_response(Intent.TOP_SELLING, Entities(), data)
+    assert "Cotton T-Shirt (P0002, 99 units)" in out
+    assert "P0003 (50 units)" in out  # unnamed products keep the old format
+
+
+def test_template_reorder_uses_product_name():
+    from app.services.chat_service import _template_response
+
+    data = {
+        "items": [{"product_id": "P0007", "product_name": "Kitchen Blender",
+                   "recommended_reorder_quantity": 4564.0}],
+        "products_checked": 20,
+        "as_of_date": "2025-12-31",
+    }
+    out = _template_response(Intent.REORDER_RECOMMENDATION, Entities(), data)
+    assert "Kitchen Blender (P0007, 4564 units)" in out
+
+
+def test_current_stock_data_carries_product_name(db):
+    from app.models import Product
+
+    r = handle_chat_message(db, "How much stock for P0001?")
+    assert r.intent == Intent.CURRENT_STOCK
+    assert r.data is not None
+    expected = db.get(Product, "P0001").name
+    assert r.data.get("product_name") == expected
+
+
+def test_top_selling_data_carries_product_names(db):
+    r = handle_chat_message(db, "what are our top-selling products")
+    assert r.intent == Intent.TOP_SELLING
+    assert r.data is not None
+    products = r.data.get("products") or []
+    assert products, "expected sales history in the test dataset"
+    assert all(p.get("product_name") for p in products)
+
+
+def test_restock_answer_lists_named_products(db):
+    r = handle_chat_message(db, "what needs to be restocked")
+    assert r.intent == Intent.LOW_STOCK
+    if r.data and r.data.get("items"):
+        first = r.data["items"][0]
+        # Every listed row now carries its catalog name (when one exists).
+        from app.models import Product
+        expected = db.get(Product, first["product_id"]).name
+        if expected:
+            assert first.get("product_name") == expected
+
+
+# --- Planner picking a product-scoped tool without a product falls back to rules
+
+def test_planner_product_tool_without_id_falls_back_to_rules(db, monkeypatch):
+    """Regression: 'show me all products' was sometimes answered with
+    'Which product would you like information about?' when the LLM planner
+    chose get_product_info without extracting any product."""
+    from app.nlp.request_planner import RequestPlan
+    import app.services.chat_service as chat_service_module
+
+    monkeypatch.setattr(
+        chat_service_module,
+        "plan_request",
+        lambda *args, **kwargs: RequestPlan(
+            request_type="read", tool="get_product_info", confidence=0.9
+        ),
+    )
+    r = handle_chat_message(db, "show me all products")
+    assert r.intent == Intent.CURRENT_STOCK
+    assert r.parse_method == "rules"
+    assert r.data is not None
+    assert "Which product would you like information about?" not in r.message

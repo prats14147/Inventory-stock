@@ -15,12 +15,13 @@ function num(value: unknown): number | null {
 }
 
 /** Deep links carry ?product= so the target page opens already filtered. */
-function productLink(productId: string | null, to: string, label: string) {
+function productLink(productId: string | null, to: string, label: string, productName?: unknown) {
   if (!productId) return null;
   const href = to.includes("?") ? `${to}&product=${encodeURIComponent(productId)}` : `${to}?product=${encodeURIComponent(productId)}`;
+  const name = typeof productName === "string" && productName.trim() ? productName : null;
   return (
     <Link to={href} className="font-medium text-brand-700 underline-offset-2 hover:underline">
-      {label}: {productId} →
+      {label}: {name ? `${name} (${productId})` : productId} →
     </Link>
   );
 }
@@ -52,7 +53,7 @@ export default function ChatAnswerCard({ response }: { response: ChatResponse })
       return (
         <div className="mt-2 rounded bg-white/70 p-2 text-xs">
           <div className="mb-1 flex items-center justify-between gap-2">
-            {productLink(productId, "/inventory", "View in Inventory")}
+            {productLink(productId, "/inventory", "View in Inventory", data.product_name)}
             <PinControl productId={productId} />
           </div>
           <dl className="space-y-0.5">
@@ -71,7 +72,7 @@ export default function ChatAnswerCard({ response }: { response: ChatResponse })
         <div className="mt-2 rounded bg-white/70 p-2 text-xs">
           <div className="mb-1 flex items-center justify-between gap-2">
             <RiskBadge risk={risk as RiskLevel} />
-            {productLink(productId, "/stockout", "Risk details")}
+            {productLink(productId, "/stockout", "Risk details", data.product_name)}
           </div>
           <div className="mb-1 flex justify-end">
             <PinControl productId={productId} />
@@ -93,7 +94,7 @@ export default function ChatAnswerCard({ response }: { response: ChatResponse })
       return (
         <div className="mt-2 rounded bg-white/70 p-2 text-xs">
           <div className="mb-1 flex items-center justify-between gap-2">
-            {productLink(productId, "/reorder", "View in Reorder")}
+            {productLink(productId, "/reorder", "View in Reorder", data.product_name)}
             <PinControl productId={productId} />
           </div>
           <dl className="space-y-0.5">
@@ -111,7 +112,7 @@ export default function ChatAnswerCard({ response }: { response: ChatResponse })
       return (
         <div className="mt-2 rounded bg-white/70 p-2 text-xs">
           <div className="mb-1 flex items-center justify-between gap-2">
-            {productLink(productId, "/forecast", "Open forecast")}
+            {productLink(productId, "/forecast", "Open forecast", data.product_name)}
             <PinControl productId={productId} />
           </div>
           <dl className="space-y-0.5">
@@ -135,9 +136,10 @@ export default function ChatAnswerCard({ response }: { response: ChatResponse })
           <ul className="space-y-0.5 text-gray-700">
             {products.map((p) => {
               const row = p as Record<string, unknown>;
+              const name = typeof row.product_name === "string" && row.product_name.trim() ? row.product_name : null;
               return (
                 <li key={String(row.product_id)}>
-                  {String(row.product_id)} — {num(row.total_units_sold)?.toFixed(0) ?? "?"} units
+                  {name ? `${name} (${row.product_id})` : String(row.product_id)} — {num(row.total_units_sold)?.toFixed(0) ?? "?"} units
                 </li>
               );
             })}

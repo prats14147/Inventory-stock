@@ -52,7 +52,13 @@ from app.nlp.intent import PRODUCT_REQUIRED_INTENTS, Intent
 from app.nlp.request_planner import plan_request, prefer_explicit_stock_action
 from app.nlp.llm_client import LLMUnavailableError
 from app.nlp.prompts import RESPONSE_GENERATION_SYSTEM_PROMPT
-from app.nlp.rules import extract_entities, is_stock_write_request, looks_like_follow_up
+from app.nlp.rules import (
+    _FAREWELL_RE,
+    _THANKS_RE,
+    extract_entities,
+    is_stock_write_request,
+    looks_like_follow_up,
+)
 from app.nlp.tool_registry import TOOL_DEFINITIONS, TOOLS_BY_NAME
 from app.repositories import product_repository
 from app.models import DailyInventory, DailySales, Product
@@ -73,14 +79,8 @@ log = logging.getLogger("chat_service")
 # --- Constants --------------------------------------------------------------
 
 HELP_TEXT = (
-    "I can answer questions about current stock, low stock, best/slow sellers, "
-    "sales trends, revenue, and store gross profit/loss by product/store/category and time period, forecasts, stockout "
-    "risk, and reorder quantities. Try \"How many units did P0001 sell last week?\" "
-    "or \"Show weekly sales for P0001 at S001 this month.\" Profit uses costs saved with recorded sales; older "
-    "imported sales without costs are excluded. For stock changes, say "
-    "\"received 10 units of P0001 at S001\" or \"I sold 3 units of P0001 at S001\". "
-    "If you say \"deduct\" or \"remove\", I will ask whether it was a sale or another kind of adjustment. "
-    "I show a confirmation preview before changing stock."
+    "I can check stock, low stock, best sellers, sales, forecasts, stockout risk, and reorders. "
+    "Try \"How much stock for P0001?\" or \"What needs to be restocked?\""
 )
 
 _SALE_QUANTITY_RE = re.compile(
@@ -417,21 +417,88 @@ class MissingEntityError(Exception):
 
 # --- Deterministic template fallback (used when no LLM / LLM unavailable) --
 
+def _product_label(product_id, product_name=None, detail: str | None = None) -> str:
+    """Render a product as ``Wireless Headphones (P0001)``.
+
+    Falls back to the bare ID when the catalog has no display name, and puts
+    a ``detail`` clause inside the parentheses when one is supplied
+    (``Wireless Headphones (P0001, 40 on hand)`` / ``P0007 (40 on hand)``).
+    """
+    name = str(product_name or "").strip()
+    if detail is None:
+        return f"{name} ({product_id})" if name else str(product_id)
+    if name:
+        return f"{name} ({product_id}, {detail})"
+    return f"{product_id} ({detail})"
+
+
+def _attach_product_names(db: Session, data):
+    """Add ``product_name`` next to every ``product_id`` inside a tool result.
+
+    One catalog query per turn (the products table is tiny) instead of a
+    join in every tool executor. Everything downstream -- the LLM phrasing
+    pass, the deterministic template, saved turn data, and frontend cards --
+    then sees human-readable names without extra work. ``group_value`` is
+    annotated too so revenue/financial answers grouped by product can show
+    names. Existing ``product_name``/``name`` fields are left untouched.
+    """
+    names = product_repository.product_names_map(db)
+    if not names:
+        return data
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            pid = node.get("product_id")
+            if "product_name" not in node and isinstance(pid, str) and pid in names:
+                node["product_name"] = names[pid]
+            group_value = node.get("group_value")
+            if "product_name" not in node and isinstance(group_value, str) and group_value in names:
+                node["product_name"] = names[group_value]
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    return data
+
+
+def _product_label_for_db(db: Session, product_id) -> str:
+    """``_product_label`` for message paths outside the tool pipeline."""
+    product = product_repository.get_product(db, product_id)
+    return _product_label(product_id, product.name if product else None)
+
+
 def _template_response(intent: Intent, entities: Entities, data: dict) -> str:
     if intent == Intent.CURRENT_STOCK:
         if "total_inventory_units" in data:
             return (f"Current inventory has {data['total_inventory_units']:,} units across "
                     f"{data['product_count']} products and {data['store_count']} stores "
                     f"(as of {data['as_of_date']}).")
-        return f"{data['product_id']} currently has {data['total_inventory']:.0f} units in stock (as of {data['as_of_date']}, across {len(data['stores'])} stores)."
+        product = _product_label(data["product_id"], data.get("product_name"))
+        return f"{product} currently has {data['total_inventory']:.0f} units in stock (as of {data['as_of_date']}, across {len(data['stores'])} stores)."
     if intent == Intent.LOW_STOCK:
-        return f"{data['count']} store-product combinations are below the low-stock threshold of {data['threshold']} units (as of {data['as_of_date']})."
+        items = data.get("items") or []
+        threshold = data.get("threshold")
+        as_of = data.get("as_of_date")
+        if not items:
+            return f"Nothing is below the {threshold}-unit low-stock threshold as of {as_of}."
+        top = items[:8]
+        listing = "; ".join(
+            f"{_product_label(item.get('product_id'), item.get('product_name'), f'{item.get('inventory_level')} on hand')} at {item.get('store_id')}"
+            for item in top
+        )
+        extra = f" — plus {len(items) - len(top)} more" if len(items) > len(top) else ""
+        return (
+            f"{len(items)} store-product combinations are below {threshold} units as of {as_of}: "
+            f"{listing}{extra}."
+        )
     if intent == Intent.LOW_STOCK_FAST_SELLING:
         if not data["items"]:
             return data.get("note") or "No products matched both low stock and positive sales in the measured period."
         summary = "; ".join(
-            f"{item['product_id']} at {item['store_id']} ({item['inventory_level']} on hand, "
-            f"{item['units_sold_in_30_days']} sold in the 30-day sales window)"
+            f"{_product_label(item['product_id'], item.get('product_name'), f'{item['inventory_level']} on hand, {item['units_sold_in_30_days']} sold in the 30-day sales window')} at {item['store_id']}"
             for item in data["items"][:8]
         )
         return f"Low-stock items with recent sales: {summary}. {data['note']}"
@@ -439,7 +506,7 @@ def _template_response(intent: Intent, entities: Entities, data: dict) -> str:
         if not data["items"]:
             return "I couldn't find stock movements for those product, store, or date filters."
         recent = "; ".join(
-            f"{item['business_date']} {item['product_id']} at {item['store_id']}: "
+            f"{item['business_date']} {_product_label(item['product_id'], item.get('product_name'))} at {item['store_id']}: "
             f"{item['movement_type'].lower().replace('_', ' ')} {item['quantity_delta']:+d} "
             f"({item['quantity_before']} → {item['quantity_after']}, {item['reason']})"
             for item in data["items"][:5]
@@ -449,34 +516,49 @@ def _template_response(intent: Intent, entities: Entities, data: dict) -> str:
         top = data["products"][:3]
         if not top:
             return "I couldn't find sales records for that date range. Try a wider period."
-        names = ", ".join(f"{p['product_id']} ({p['total_units_sold']:.0f} units)" for p in top)
+        names = ", ".join(
+            f"{_product_label(p['product_id'], p.get('product_name'), f'{p['total_units_sold']:.0f} units')}"
+            for p in top
+        )
         return f"The top-selling products{_period_label(data.get('start_date'), data.get('end_date'))} are: {names}."
     if intent == Intent.BOTTOM_SELLING:
         bottom = data["products"][:3]
         if not bottom:
             return "I couldn't find sales records for that date range. Try a wider period."
-        names = ", ".join(f"{p['product_id']} ({p['total_units_sold']:.0f} units)" for p in bottom)
+        names = ", ".join(
+            f"{_product_label(p['product_id'], p.get('product_name'), f'{p['total_units_sold']:.0f} units')}"
+            for p in bottom
+        )
         return f"The lowest-selling products{_period_label(data.get('start_date'), data.get('end_date'))} are: {names}."
     if intent == Intent.DEMAND_FORECAST:
+        product = _product_label(data["product_id"], data.get("product_name"))
         return (
-            f"Forecast demand for {data['product_id']} over the next {data['model_horizon_days']} days "
+            f"Forecast demand for {product} over the next {data['model_horizon_days']} days "
             f"(by {data['target_date']}) is approximately {data['forecast_total_units']:.0f} units across all stores."
         )
     if intent == Intent.STOCKOUT_RISK:
         if "items" in data:
             if not data["items"]:
                 return f"None of the {data['products_checked']} products checked are currently at medium or high stockout risk (inventory as of {data['as_of_date']})."
-            summary = "; ".join(f"{item['product_id']} ({item['risk'].lower()} risk)" for item in data["items"][:8])
+            summary = "; ".join(
+                f"{_product_label(item['product_id'], item.get('product_name') or item.get('name'), f'{item['risk'].lower()} risk')}"
+                for item in data["items"][:8]
+            )
             return f"Products at medium or high stockout risk as of {data['as_of_date']}: {summary}. {data['products_checked']} products checked."
-        return f"{data['product_id']} has {data['risk']} stockout risk. {data['reason']}"
+        product = _product_label(data["product_id"], data.get("product_name") or data.get("name"))
+        return f"{product} has {data['risk']} stockout risk. {data['reason']}"
     if intent == Intent.REORDER_RECOMMENDATION:
         if "items" in data:
             if not data["items"]:
                 return f"No positive reorder quantity is recommended for the {data['products_checked']} products checked as of {data['as_of_date']}."
-            summary = "; ".join(f"{item['product_id']}: {item['recommended_reorder_quantity']:.0f} units" for item in data["items"][:10])
+            summary = "; ".join(
+                f"{_product_label(item['product_id'], item.get('product_name') or item.get('name'), f'{item['recommended_reorder_quantity']:.0f} units')}"
+                for item in data["items"][:10]
+            )
             return f"Recommended reorders as of {data['as_of_date']}: {summary}. These use the configured lead-time assumption."
+        product = _product_label(data["product_id"], data.get("product_name") or data.get("name"))
         return (
-            f"{data['product_id']} currently has {data['current_inventory']:.0f} units. Estimated demand over the "
+            f"{product} currently has {data['current_inventory']:.0f} units. Estimated demand over the "
             f"{data['assumptions']['lead_time_days']}-day lead time is {data['forecast_lead_time_demand']:.1f} units, "
             f"with a safety stock of {data['safety_stock']:.1f}. Recommended reorder quantity: "
             f"{data['recommended_reorder_quantity']:.0f} units."
@@ -498,7 +580,15 @@ def _template_response(intent: Intent, entities: Entities, data: dict) -> str:
         if not n_points:
             return "I couldn't find sales records for those filters. Try another product, store, or date range."
         filters = data.get("filters", {})
-        selected = [str(filters[key]) for key in ("product_id", "store_id", "category") if filters.get(key)]
+        selected = []
+        for key in ("product_id", "store_id", "category"):
+            value = filters.get(key)
+            if not value:
+                continue
+            if key == "product_id":
+                selected.append(_product_label(value, filters.get("product_name")))
+            else:
+                selected.append(str(value))
         scope = " for " + ", ".join(selected) if selected else ""
         period = _period_label(filters.get("start_date"), filters.get("end_date"))
         return f"Here's the {data['granularity']} sales trend{scope}{period} ({n_points} data points, measured in units sold)."
@@ -509,7 +599,8 @@ def _template_response(intent: Intent, entities: Entities, data: dict) -> str:
             key = {"product": "product_id", "store": "store_id", "category": "category"}.get(data.get("group_by"), "group_value")
             direction = "lowest" if data.get("sort_order") == "ascending" else "highest"
             return "Recorded net revenue by " + str(data["group_by"]) + f" ({direction} first): " + "; ".join(
-                f"{item.get(key, item['group_value'])} ${item['net_sales_revenue']:,.2f}" for item in data["items"][:10]
+                f"{_product_label(item.get(key, item['group_value']), item.get('product_name'))} ${item['net_sales_revenue']:,.2f}"
+                for item in data["items"][:10]
             ) + "."
         filters = data.get("filters", {})
         scope = ", ".join(str(filters[key]) for key in ("product_id", "store_id", "category") if filters.get(key))
@@ -550,7 +641,7 @@ def _template_response(intent: Intent, entities: Entities, data: dict) -> str:
             margin = item["gross_margin_percent"]
             return f"{margin:.1f}% margin" if margin is not None else "margin unavailable"
         summary = "; ".join(
-            f"{item.get(label_field, item['group_value'])}: ${item['gross_profit_or_loss']:,.2f} gross profit/loss "
+            f"{_product_label(item.get(label_field, item['group_value']), item.get('product_name'))}: ${item['gross_profit_or_loss']:,.2f} gross profit/loss "
             f"({margin_label(item)}, "
             f"{item['cost_coverage_percent']:.0f}% cost coverage)" for item in best
         )
@@ -558,7 +649,8 @@ def _template_response(intent: Intent, entities: Entities, data: dict) -> str:
         return f"Gross profit/loss by {group_by}, {direction} first{_period_label(data['filters'].get('start_date'), data['filters'].get('end_date'))}: {summary}. Historical sales without costs are excluded."
     if intent == Intent.PRODUCT_INFO:
         inv = data["inventory"]
-        return f"{inv['product_id']}: {inv['total_inventory']:.0f} units in stock as of {inv['as_of_date']}."
+        product = _product_label(inv["product_id"], inv.get("product_name"))
+        return f"{product}: {inv['total_inventory']:.0f} units in stock as of {inv['as_of_date']}."
     return "Here's what I found."
 
 
@@ -728,7 +820,8 @@ class ChatSessionManager:
             session.metadata.pop("pending_sale", None)
             self.session_store.save_session(session)
             data = {"sale_status": "recorded", **result.model_dump(mode="json")}
-            return (f"Sale recorded: {result.units_sold} units of {result.product_id} at {result.store_id}. "
+            product = _product_label_for_db(db, result.product_id)
+            return (f"Sale recorded: {result.units_sold} units of {product} at {result.store_id}. "
                     f"There are now {result.remaining_inventory} units on hand; sales history has been updated."), data, Intent.RECORD_SALE
 
         entities = extract_entities(message)
@@ -795,7 +888,17 @@ class ChatSessionManager:
                 return "I don't have a cost price saved for this product. What is its unit cost? I need that to track profit; stock has not changed.", {
                     "sale_status": "collecting_details", "pending_sale": {**draft, "awaiting_field": "unit_cost"},
                 }, Intent.RECORD_SALE
-        draft["category"] = stock.category or "Uncategorized"
+        # Category comes from the row-level inventory data when present;
+        # otherwise fall back to the product catalog (the source dataset has
+        # NULL category on older rows) before ever labeling a sale
+        # "Uncategorized" -- which would add a phantom category to the
+        # by-category analytics.
+        catalog_product = db.get(Product, draft["product_id"])
+        draft["category"] = (
+            stock.category
+            or (catalog_product.category if catalog_product else None)
+            or "Uncategorized"
+        )
         draft["region"] = stock.region or "Unassigned"
         if draft["units_sold"] > stock.inventory_level:
             session.metadata["pending_sale"] = draft
@@ -810,7 +913,7 @@ class ChatSessionManager:
                 "available_units": stock.inventory_level,
                 "remaining_after_sale": stock.inventory_level - draft["units_sold"],
                 "projected_gross_profit": round(projected_profit, 2)}
-        return (f"Please confirm: record {draft['units_sold']} units of {draft['product_id']} at {draft['store_id']} "
+        return (f"Please confirm: record {draft['units_sold']} units of {_product_label_for_db(db, draft['product_id'])} at {draft['store_id']} "
                 f"at ${draft['price']:.2f} each (unit cost ${draft['unit_cost']:.2f})? Current stock is {stock.inventory_level}; "
                 f"after the sale it will be {stock.inventory_level - draft['units_sold']}. Estimated gross "
                 f"{'profit' if projected_profit >= 0 else 'loss'}: ${abs(projected_profit):.2f}."), data, Intent.RECORD_SALE
@@ -844,7 +947,7 @@ class ChatSessionManager:
                 )
             if pending:
                 response_text = (
-                    f"Still holding the draft PO for {pending['loser_product_id']} "
+                    f"Still holding the draft PO for {_product_label_for_db(db, pending['loser_product_id'])} "
                     f"({pending['quantity']} units) -- which store should receive it?"
                 )
                 self._save_turn(session_id, message, response_text, Intent.PRODUCT_COMPARE, method, {"compare_status": "awaiting_store", "pending_compare": pending}, entities)
@@ -887,7 +990,7 @@ class ChatSessionManager:
         _TIER_RANK = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
         if len(available) == 1:
             verdict = available[0]
-            verdict_note = f"Only {verdict['product_id']} could be scored."
+            verdict_note = f"Only {_product_label(verdict['product_id'], verdict.get('name'))} could be scored."
         else:
             first, second = available[0], available[1]
             first_key = (_TIER_RANK[first["risk"]], first["required_inventory"] - first["current_inventory"])
@@ -896,15 +999,15 @@ class ChatSessionManager:
                 verdict, verdict_note = None, "Both score identically -- neither is riskier."
             else:
                 verdict = first if first_key < second_key else second
-                verdict_note = f"{verdict['product_id']} is riskier."
+                verdict_note = f"{_product_label(verdict['product_id'], verdict.get('name'))} is riskier."
 
         lines = []
         for row in rows:
             if row.get("unavailable"):
-                lines.append(f"{row['product_id']}: not enough sales history to score.")
+                lines.append(f"{_product_label(row['product_id'], row.get('name'))}: not enough sales history to score.")
             else:
                 lines.append(
-                    f"{row['product_id']} ({row['name']}): {row['risk']} risk, "
+                    f"{_product_label(row['product_id'], row.get('name'))}: {row['risk']} risk, "
                     f"{row['current_inventory']:.0f} on hand vs {row['required_inventory']:.0f} required, "
                     f"reorder {row['recommended_reorder_quantity']:.0f} units."
                 )
@@ -968,7 +1071,7 @@ class ChatSessionManager:
         self.session_store.save_session(session)
         data.update({"compare_status": "draft_created", "purchase_order": order.to_dict()})
         prefix = (" ".join(lines) + f" {verdict_note}").strip()
-        draft_sentence = (f"Draft PO #{order.id} created: {quantity} units of {product_id} "
+        draft_sentence = (f"Draft PO #{order.id} created: {quantity} units of {_product_label_for_db(db, product_id)} "
                           f"for {store_id}. Receive it on the Reorder page to post the delivery.")
         response_text = f"{prefix} {draft_sentence}" if prefix else draft_sentence
         self._save_turn(session_id, message, response_text, Intent.PRODUCT_COMPARE, method, data, entities)
@@ -1014,7 +1117,8 @@ class ChatSessionManager:
             self.session_store.save_session(session)
             data = {"adjustment_status": "recorded", **result.model_dump(mode="json")}
             change = "increased" if result.quantity_delta > 0 else "reduced"
-            return (f"Stock updated: {result.product_id} at {result.store_id} was {change} by "
+            product = _product_label_for_db(db, result.product_id)
+            return (f"Stock updated: {product} at {result.store_id} was {change} by "
                     f"{abs(result.quantity_delta)} units; {result.quantity_after} remain. This was recorded as "
                     f"{result.movement_type.lower().replace('_', ' ')}, not as a sale."), data, Intent.ADJUST_STOCK
 
@@ -1083,7 +1187,8 @@ class ChatSessionManager:
         session.metadata["pending_stock_adjustment"] = draft
         self.session_store.save_session(session)
         verb = "add" if delta > 0 else "reduce"
-        return (f"Please confirm: {verb} {abs(delta)} units of {product_id} at {store_id} ({reason}). "
+        product = _product_label_for_db(db, product_id)
+        return (f"Please confirm: {verb} {abs(delta)} units of {product} at {store_id} ({reason}). "
                 f"Current stock is {stock.inventory_level}; afterward it will be {after}. "
                 "This will change inventory only; it will not create a sale or revenue."), {
                     "adjustment_status": "awaiting_confirmation", "pending_adjustment": draft,
@@ -1229,6 +1334,35 @@ class ChatSessionManager:
         # Structured action plans are proposals only. Reuse the established
         # backend validation and preview/confirmation handlers for all writes.
         if planned_request and planned_request.request_type in {"sale", "receive", "decrease"}:
+            # A restock/reorder QUESTION ("what needs to be restocked?", "what
+            # should I restock?") is a low-stock READ, never a write -- even
+            # when the planner labels it receive/decrease. Only an explicit
+            # quantity + target ("restock P0001 with 50 at S001", "received 10
+            # units of P0001 at S001") may enter the write path. Without this
+            # guard "what needs to be rstocked" (typo included) degrades into
+            # "How many units should I change?".
+            _question_like = re.search(
+                r"\b(what|which|when|where|who|whom|whose|why|"
+                r"how\s+(?:many|much|do|does|can|should|could)|"
+                r"do\s+(?:i|we)|does\s+(?:it|that|this)|"
+                r"should\s+(?:i|we)|needs?\s+to\s+be|need\s+to\s+be)\b",
+                message,
+                re.IGNORECASE,
+            )
+            _no_ids = re.sub(r"\b[PS]\d+\b", " ", message, flags=re.IGNORECASE)
+            _explicit_qty = re.search(
+                r"\b\d[\d,]*\s*(?:units?|items?|pcs|pieces)|\b(?:qty|quantity)\s*[:=]?\s*\d",
+                _no_ids,
+                re.IGNORECASE,
+            )
+            if _question_like and planned_request.quantity is None and _explicit_qty is None:
+                # No quantity anywhere: this is a question, not a write.
+                planned_request = None
+            elif planned_request.quantity is None and _explicit_qty is None:
+                _proposed_ids = planned_request.arguments or {}
+                if not _proposed_ids.get("product_id") or not _proposed_ids.get("store_id"):
+                    planned_request = None
+        if planned_request and planned_request.request_type in {"sale", "receive", "decrease"}:
             proposed = planned_request.arguments
             product_id = proposed.get("product_id") or pending_clarification.get("product_id")
             store_id = proposed.get("store_id") or pending_clarification.get("store_id")
@@ -1277,7 +1411,13 @@ class ChatSessionManager:
             return ConversationChatResponse(message=response_text, intent=action_intent,
                 entities=extract_entities(message).model_dump(), parse_method="gemini_plan", data=data,
                 session_id=session_id, context=cm.get_context_for_llm())
-        if _RECEIVE_ACTION_RE.search(message) and not _STOCK_HISTORY_QUERY_RE.search(message):
+        # A restock/receive QUESTION ("what needs to be restocked?") is not a
+        # stock write. Same question-word guard as prefer_explicit_stock_action:
+        # without it, every restock question diverts into "How many units
+        # should I change?" -- the exact failure this guards against.
+        if _RECEIVE_ACTION_RE.search(message) and not _STOCK_HISTORY_QUERY_RE.search(message) and not re.search(
+            r"\b(?:how many|how much|what|which|show|list|when|trend|forecast|history)\b", message, re.I
+        ):
             response_text, data, action_intent = self._handle_stock_adjustment(db, session, message)
             self._save_turn(session_id, message, response_text, action_intent, "rules", data, extract_entities(message))
             return ConversationChatResponse(message=response_text, intent=action_intent,
@@ -1308,8 +1448,11 @@ class ChatSessionManager:
                 session_id=session_id, context=cm.get_context_for_llm())
 
         # Deterministic stock routing remains available when Gemini is unavailable.
+        # Same question-word guard as above: "what/when/which ... restock?"
+        # asks for the low-stock list, it does not report a stock movement.
         if not _STOCK_HISTORY_QUERY_RE.search(message) and (
-            _INVENTORY_ACTION_RE.search(message)
+            (_INVENTORY_ACTION_RE.search(message)
+             and not re.search(r"\b(?:how many|how much|what|which|show|list|when|trend|forecast|history)\b", message, re.I))
             or (pending_adjustment and _is_pending_adjustment_reply(message, pending_adjustment))
         ):
             response_text, data, action_intent = self._handle_stock_adjustment(db, session, message)
@@ -1339,7 +1482,7 @@ class ChatSessionManager:
                 and _PROJECT_QUESTION_RE.search(message)
                 and not re.search(r"\bP0*\d{1,4}\b", message, re.I)):
             knowledge = project_knowledge_service.answer(message, self.llm_client)
-            if knowledge:
+            if knowledge and _PROJECT_QUESTION_RE.search(message):
                 response_text, data = knowledge["message"], knowledge["data"]
                 self._save_turn(session_id, message, response_text, Intent.UNKNOWN, "knowledge", data, extract_entities(message))
                 return ConversationChatResponse(message=response_text, intent=Intent.UNKNOWN,
@@ -1353,6 +1496,19 @@ class ChatSessionManager:
             intent = TOOLS_BY_NAME[planned_request.tool].intent
             entities = Entities(**planned_request.arguments)
             method = "gemini_plan"
+            # The planner nondeterministically picks a product-scoped tool
+            # without extracting a product for listing phrasings (e.g. it
+            # answers "show me all products" with get_product_info, which then
+            # asks "Which product would you like information about?"). When no
+            # product_id came through, let the deterministic rules classify
+            # the message first; only keep the plan (and its clarification
+            # question) if the rules have no answer either.
+            if intent in {Intent.PRODUCT_INFO, Intent.DEMAND_FORECAST} and not entities.product_id:
+                rule_intent, rule_entities, rule_method = parser.parse(
+                    message, llm_client=None, context=cm.get_context_for_llm()
+                )
+                if rule_intent != Intent.UNKNOWN:
+                    intent, entities, method = rule_intent, rule_entities, rule_method
         else:
             intent, entities, method = parser.parse(
                 message, llm_client=None, context=cm.get_context_for_llm()
@@ -1407,6 +1563,25 @@ class ChatSessionManager:
                 context=cm.get_context_for_llm(),
             )
 
+        # Small talk gets a short reply, not the full capability lecture.
+        if intent == Intent.GREETING:
+            if _FAREWELL_RE.match(message):
+                response_text = "Goodbye! I'll be here when you need inventory answers."
+            elif _THANKS_RE.match(message):
+                response_text = "You're welcome! Ask me anytime about stock, sales, forecasts, or reorders."
+            else:
+                response_text = "Hi! I can check stock, sales, forecasts, stockout risk, and reorders. Try 'How much stock for P0001?'"
+            self._save_turn(session_id, message, response_text, intent, method, {})
+            return ConversationChatResponse(
+                message=response_text,
+                intent=intent,
+                entities=entities.model_dump(),
+                parse_method=method,
+                data=None,
+                session_id=session_id,
+                context=cm.get_context_for_llm(),
+            )
+
         if intent == Intent.UNKNOWN:
             if re.search(r"\b(profit|margin)\b", message, re.I):
                 response_text = "I can calculate gross profit/loss for recorded sales when their cost price is available. Add a product cost under Inventory, then record sales with selling price and cost. Historical imported sales have no cost data, so their profit cannot be calculated."
@@ -1415,7 +1590,7 @@ class ChatSessionManager:
                     entities=entities.model_dump(), parse_method="rules", data=None,
                     session_id=session_id, context=cm.get_context_for_llm())
             knowledge = project_knowledge_service.answer(message, self.llm_client)
-            if knowledge:
+            if knowledge and _PROJECT_QUESTION_RE.search(message):
                 response_text = knowledge["message"]
                 data = knowledge["data"]
                 self._save_turn(session_id, message, response_text, intent, "knowledge", data, entities)
@@ -1428,7 +1603,11 @@ class ChatSessionManager:
                     session_id=session_id,
                     context=cm.get_context_for_llm(),
                 )
-            response_text = "I'm not sure what you're asking. " + HELP_TEXT
+            # Short by design: the full capability lecture lives behind
+            # explicit "help". An unrecognized question gets one example
+            # and one pointer instead of a wall of text.
+            response_text = ("I'm not sure what you're asking. Try 'How much stock for P0001?' "
+                             "or 'what needs to be restocked?' — or type help for everything I can do.")
             self._save_turn(session_id, message, response_text, intent, method, {})
             return ConversationChatResponse(
                 message=response_text,
@@ -1503,7 +1682,7 @@ class ChatSessionManager:
 
         try:
             _notify(on_stage, STAGE_QUERYING)
-            data = tool(db, entities)
+            data = _attach_product_names(db, tool(db, entities))
         except MissingEntityError as e:
             response_text = str(e)
             self._save_turn(session_id, message, response_text, intent, method, {})

@@ -10,6 +10,7 @@ combine ("hybrid" architecture per spec section 28).
 
 from __future__ import annotations
 
+import difflib
 import re
 import calendar
 from datetime import date, timedelta
@@ -29,7 +30,27 @@ _DOMAIN_TYPO_MAP = {
     "stok": "stock",
     "reordr": "reorder",
     "restok": "restock",
+    "restcok": "restock",
+    "restcokk": "restock",
+    "restoc": "restock",
+    "restocks": "restocks",
+    "restocked": "restocked",
+    "restocking": "restocking",
+    "rstock": "restock",
+    "rstocks": "restocks",
+    "rstocked": "restocked",
+    "rstocking": "restocking",
+    "restockd": "restocked",
+    "restokd": "restocked",
+    "nees": "needs",
     "dedcut": "deduct",
+    "wht": "what",
+    "wat": "what",
+    "wich": "which",
+    "whch": "which",
+    "emand": "demand",
+    "demmand": "demand",
+    "ind": "in",
 }
 
 
@@ -53,6 +74,13 @@ _NON_PRODUCT_REFERENCES = {
     "profit", "loss", "margin", "revenue", "sales", "stock", "inventory", "the",
     "this", "last", "next", "each", "most", "least", "selling", "made", "sold",
     "store", "stores", "category", "today", "yesterday",
+    # Function words captured by the "product/item/sku <word>" pattern in
+    # questions like "what product is in demand" -- never a product name.
+    "is", "are", "was", "were", "be", "been", "being", "a", "an", "in", "on",
+    "at", "by", "of", "and", "or", "with", "that", "which", "who", "what",
+    "when", "where", "why", "how", "do", "does", "did", "should", "would",
+    "can", "could", "will", "we", "i", "you", "it", "our", "my", "your",
+    "demand", "available", "low", "out", "left", "many", "much",
 }
 _STOCK_WRITE_RE = re.compile(
     r"(?:\b(?:i|we)\s+(?:just\s+)?sold\b|\b(?:record|log)\s+(?:a\s+)?sale\b|"
@@ -68,9 +96,9 @@ _INTENT_RULES: list[tuple[Intent, list[str]]] = [
     (Intent.REVENUE_ANALYSIS, ["revenue", "sales revenue", "sales value", "sales amount", "money from sales", "money made from sales", "net sales", "how much did we earn", "how much money did i make", "how much money did we make", "how much did i make", "how much did we make", "earned from selling", "made from selling"]),
     (Intent.REORDER_RECOMMENDATION, ["reorder", "re-order", "should i order", "should we order", "how much should i order", "how many should i buy", "should we buy more", "restock quantity", "how much to restock", "what should i replenish"]),
     (Intent.STOCKOUT_RISK, ["stockout", "stock out", "run out", "running out", "sell out", "out of stock soon", "risk of running out", "at risk", "run short", "run low", "last long enough", "last until", "enough stock to last"]),
-    (Intent.DEMAND_FORECAST, ["forecast", "predict", "prediction", "projected demand", "expected demand", "how much will we sell", "how many will we sell", "future demand", "sales prediction", "demand estimate", "likely to sell", "sales expected"]),
-    (Intent.LOW_STOCK, ["low stock", "low on stock", "running low", "which products are low", "need restocking", "below the stock threshold", "need replenishment", "need to restock", "needs restocking", "running out of stock", "items to replenish"]),
-    (Intent.TOP_SELLING, ["top selling", "top-selling", "best selling", "best-selling", "top products", "sell the most", "highest selling", "most popular", "fastest selling", "most sales", "highest sales", "best performer", "top performer"]),
+    (Intent.DEMAND_FORECAST, ["forecast", "predict", "prediction", "projected demand", "expected demand", "how much will we sell", "how many will we sell", "future demand", "sales prediction", "demand estimate", "likely to sell", "sales expected", "demand for", "what is the demand", "whats the demand", "what's the demand"]),
+    (Intent.LOW_STOCK, ["low stock", "low on stock", "running low", "which products are low", "need restocking", "below the stock threshold", "need replenishment", "need to restock", "needs restocking", "needs to be restocked", "need to be restocked", "to be restocked", "should i restock", "should we restock", "what should i restock", "what to restock", "running out of stock", "items to replenish"]),
+    (Intent.TOP_SELLING, ["top selling", "top-selling", "best selling", "best-selling", "top products", "sell the most", "highest selling", "most popular", "fastest selling", "most sales", "highest sales", "best performer", "top performer", "in demand", "most demanded", "high demand", "what is selling", "whats selling", "what's selling", "selling well", "what sells best"]),
     (Intent.BOTTOM_SELLING, ["bottom selling", "worst selling", "least selling", "slowest selling", "sell the least", "lowest selling", "slow movers", "slow moving", "slow-moving", "least popular"]),
     (Intent.CATEGORY_ANALYSIS, ["by category", "category breakdown", "which category", "category analysis", "compare categories", "categories sell", "category sells"]),
     (Intent.STORE_ANALYSIS, ["by store", "store breakdown", "which store", "store analysis", "compare stores", "stores sell", "store sells"]),
@@ -78,6 +106,16 @@ _INTENT_RULES: list[tuple[Intent, list[str]]] = [
     (Intent.HELP, ["help", "what can you do", "what can you help"]),
     (Intent.CURRENT_STOCK, [
         "how many items are left",
+        "what products do we have",
+        "which products do we sell",
+        "show me all products",
+        "list all products",
+        "which products do we have",
+        "products do we have",
+        "what products are in stock",
+        "what products do you have",
+        "what do we have in stock",
+        "in stock",
         "how many products are left",
         "current inventory",
         "my inventory",
@@ -131,8 +169,115 @@ _INTENT_RULES: list[tuple[Intent, list[str]]] = [
 _FOLLOW_UP_PATTERNS = [
     r"\b(?:it|its|that|those|these|them|they|same|there)\b",
     r"\b(?:what|how)\s+about\b",
-    r"\b(?:the\s+)?(?:first|second|third|fourth|fifth|last|other|next|previous)(?:\s+one)?\b",
+    # Ordinals need "the" or "one" ("the second one"). Bare "last"/"next"
+    # are usually time words ("when did we last restock", "order next week")
+    # and must NOT suppress classification -- that broke the fuzzy fallback.
+    r"\bthe\s+(?:first|second|third|fourth|fifth|last|other|next|previous)\b",
+    r"\b(?:first|second|third|fourth|fifth|last|other|next|previous)\s+one\b",
 ]
+
+
+# Fuzzy keyword signals: the exact-phrase lists above are the fast path, but
+# they cannot enumerate how people word things ("what the one product most
+# sellig one"). When no phrase matched AND the LLM planner is unavailable
+# (e.g. Groq's daily token quota is exhausted), this scored fallback still
+# routes common phrasings instead of answering "I'm not sure". Weights are
+# deliberately strong (3-4) per distinctive word: a message must reach a high
+# score with a clear margin over the runner-up, so gibberish and vague
+# follow-ups ("tell me something", "what about the other one?") stay UNKNOWN
+# and never fabricate an answer.
+_INTENT_SIGNALS: dict[Intent, dict[str, int]] = {
+    Intent.TOP_SELLING: {"selling": 4, "sells": 4, "sold": 2, "best": 3, "top": 3,
+                         "popular": 4, "demand": 3, "demanded": 4, "fastest": 4,
+                         "fast": 2, "moving": 2, "hottest": 4, "hot": 3, "most": 2,
+                         "flying": 4, "shelves": 3, "outpacing": 4},
+    Intent.BOTTOM_SELLING: {"worst": 4, "slowest": 4, "slow": 3, "slowly": 3,
+                            "least": 2, "unpopular": 4, "bottom": 3},
+    Intent.LOW_STOCK: {"low": 3, "restock": 3, "restocking": 3, "replenish": 3,
+                       "replenishment": 4, "dwindling": 4, "empty": 3},
+    Intent.STOCKOUT_RISK: {"stockout": 4, "stockouts": 4, "runout": 4, "soon": 2,
+                           "risk": 3, "risky": 3, "depleted": 4, "exhausted": 4,
+                           "short": 2, "out": 1},
+    Intent.DEMAND_FORECAST: {"forecast": 4, "forecasting": 4, "predict": 4,
+                             "prediction": 4, "predicting": 4, "projected": 4,
+                             "expect": 3, "expected": 3, "future": 3, "tomorrow": 2,
+                             "estimate": 3, "anticipate": 4},
+    Intent.REORDER_RECOMMENDATION: {"reorder": 4, "reordering": 4, "order": 2,
+                                    "ordering": 2, "buy": 2, "purchasing": 3,
+                                    "supplier": 3},
+    Intent.REVENUE_ANALYSIS: {"revenue": 4, "earn": 3, "earned": 3, "earning": 3,
+                              "money": 3, "income": 3, "turnover": 3},
+    Intent.FINANCIAL_ANALYSIS: {"profit": 3, "profitable": 4, "margin": 4, "loss": 3,
+                                "losing": 3, "cogs": 4, "financial": 4},
+    Intent.SALES_TREND: {"trend": 4, "trends": 4, "history": 3, "historical": 3,
+                         "pattern": 3, "month": 3, "monthly": 3, "weekly": 3,
+                         "week": 3, "quarter": 3, "recently": 3, "lately": 3},
+    Intent.CATEGORY_ANALYSIS: {"category": 4, "categories": 4, "segment": 3,
+                               "segments": 3},
+    Intent.STORE_ANALYSIS: {"store": 2, "stores": 2, "branch": 3, "branches": 3,
+                            "location": 3, "locations": 3, "region": 3},
+    Intent.CURRENT_STOCK: {"stock": 1, "inventory": 2, "onhand": 4, "left": 1,
+                           "remaining": 3, "available": 2, "balance": 3,
+                           "holding": 3},
+    Intent.STOCK_HISTORY: {"movement": 3, "movements": 3, "adjusted": 3,
+                           "adjustment": 3, "damaged": 3, "expired": 3,
+                           "received": 3, "delivered": 3, "audit": 4},
+    Intent.PRODUCT_INFO: {"spec": 3, "specs": 3, "specification": 4, "details": 3,
+                          "information": 3, "describe": 4, "description": 4},
+}
+# Fuzzy token -> signal-word matching is only attempted for tokens >= 5 chars
+# (so "hot" can't fuzzy-match random 4-letter noise) at this similarity.
+_SIGNAL_CUTOFF = 0.82
+# A winner must either score well or be the only plausible reading:
+#  - best >= 4 (roughly one distinctive word, or two moderate ones), or
+#  - best >= 3 with no competitor at all (unambiguous single signal).
+# When it does win, it must clear the runner-up by _SIGNAL_MIN_MARGIN.
+_SIGNAL_MIN_SCORE = 4
+_SIGNAL_MIN_MARGIN = 2
+
+
+def _fuzzy_intent(lower: str) -> Intent | None:
+    """Score weighted keyword signals when no exact phrase matched.
+
+    Returns the decisive winner, or None when the reading is weak or
+    ambiguous -- UNKNOWN is safer than guessing: UNKNOWN invites the user to
+    rephrase, a wrong intent answers the wrong question.
+    """
+    tokens = [t for t in re.findall(r"[a-z']+", lower) if len(t) >= 3]
+    if not tokens:
+        return None
+    # A token that exactly matches some intent's signal word is "claimed" by
+    # that exact match -- it must not also fuzzy-match similar words in other
+    # intents ("restock" would otherwise also hit CURRENT_STOCK's "stock" and
+    # the phantom runner-up score would veto the correct, decisive winner).
+    exact_hits = set()
+    for token in tokens:
+        if any(token in weights for weights in _INTENT_SIGNALS.values()):
+            exact_hits.add(token)
+    scores: dict[Intent, int] = {}
+    for intent, weights in _INTENT_SIGNALS.items():
+        vocab = list(weights)
+        total = 0
+        for token in tokens:
+            if token in weights:
+                total += weights[token]
+            elif len(token) >= 5 and token not in exact_hits:
+                close = difflib.get_close_matches(token, vocab, n=1, cutoff=_SIGNAL_CUTOFF)
+                if close:
+                    total += weights[close[0]]
+        if total:
+            scores[intent] = total
+    if not scores:
+        return None
+    ranked = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
+    best_intent, best_score = ranked[0]
+    second_score = ranked[1][1] if len(ranked) > 1 else 0
+    decisive = best_score >= _SIGNAL_MIN_SCORE or (
+        best_score >= 3 and second_score == 0
+    )
+    if decisive and best_score - second_score >= _SIGNAL_MIN_MARGIN:
+        return best_intent
+    return None
 
 
 def looks_like_follow_up(message: str) -> bool:
@@ -328,9 +473,20 @@ def _mentions_two_products(message: str) -> bool:
     return False
 
 
+_GREETING_RE = re.compile(
+    r"^\s*(?:hi+|hello+|hey+|yo|good\s+(?:morning|afternoon|evening)|"
+    r"thanks?|thank\s+you|thx|bye+|goodbye|see\s+you)\s*[!.,]*\s*$",
+    re.IGNORECASE,
+)
+_THANKS_RE = re.compile(r"^\s*(?:thanks?|thank\s+you|thx)\s*[!.,]*\s*$", re.IGNORECASE)
+_FAREWELL_RE = re.compile(r"^\s*(?:bye+|goodbye|see\s+you)\s*[!.,]*\s*$", re.IGNORECASE)
+
+
 def classify_intent(message: str) -> Intent:
     message = _normalize_domain_terms(message)
     lower = message.lower()
+    if _GREETING_RE.match(message):
+        return Intent.GREETING
     if _COMPARE_RE.search(message) and _mentions_two_products(message):
         return Intent.PRODUCT_COMPARE
     if re.search(r"\b(?:stock|inventory)\s+(?:history|movements?|changes|adjustments?)\b", lower):
@@ -380,6 +536,17 @@ def classify_intent(message: str) -> Intent:
     # chance to match (e.g. "will P0001 run out of stock?").
     if product_and_stock:
         return Intent.CURRENT_STOCK
+    # Last resort before giving up: scored keyword signals (see _INTENT_SIGNALS)
+    # keep novel-but-clear phrasings ("what the one product most sellig one")
+    # working even when the LLM planner is unavailable. Deliberately after all
+    # exact rules so it can only add coverage, never change an existing match.
+    # Context follow-ups ("What about last month?") are excluded: they must
+    # stay UNKNOWN so ChatSessionManager can carry the previous intent forward
+    # (classifying them standalone would answer the wrong question).
+    if not looks_like_follow_up(lower):
+        fuzzy = _fuzzy_intent(lower)
+        if fuzzy is not None:
+            return fuzzy
     return Intent.UNKNOWN
 
 

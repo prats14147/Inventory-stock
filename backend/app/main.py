@@ -38,6 +38,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.routers import (
     auth,
+    briefing,
     chat,
     dashboard,
     forecast,
@@ -263,6 +264,10 @@ app.include_router(model_health.router)
 
 # Purchase orders are used by the Reorder page.
 app.include_router(purchase_orders.router)
+
+# Morning briefing powers the dashboard banner; keep it registered even
+# though it has no navbar entry of its own.
+app.include_router(briefing.router)
 
 
 # -----------------------------------------------------------------------------

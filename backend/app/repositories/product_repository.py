@@ -27,6 +27,21 @@ def get_product(db: Session, product_id: str) -> Product | None:
     return db.get(Product, product_id)
 
 
+def product_names_map(db: Session) -> dict[str, str]:
+    """Every catalog product's display name keyed by product_id.
+
+    One lightweight query over the (small) products table; the chat layer
+    uses it to render human-readable names next to raw P-codes.
+    """
+    return {
+        product_id: name
+        for product_id, name in db.execute(
+            select(Product.product_id, Product.name)
+        ).all()
+        if name
+    }
+
+
 def product_exists(db: Session, product_id: str) -> bool:
     return (
         db.execute(

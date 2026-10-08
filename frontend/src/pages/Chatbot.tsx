@@ -7,7 +7,6 @@ import {
   deleteChatSession,
   getChatSessionHistory,
   listChatSessions,
-  submitChatFeedback,
 } from "../services/api";
 import { useChatStream } from "../hooks/useChatStream";
 import type { ChatMessage, ChatSessionInfo } from "../types/chat";
@@ -50,34 +49,7 @@ export default function Chatbot() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [votes, setVotes] = useState<Record<number, boolean>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
-
-  // Backend turn_index counts user turns, so the Nth assistant answer is
-  // the (user messages before it − 1)th turn.
-  function turnIndexFor(messageIndex: number): number | null {
-    let userTurns = 0;
-    for (let k = 0; k < messageIndex; k++) {
-      if (messages[k]?.role === "user") userTurns += 1;
-    }
-    return messages[messageIndex]?.role === "assistant" ? userTurns - 1 : null;
-  }
-
-  async function vote(messageIndex: number, helpful: boolean) {
-    const turnIndex = turnIndexFor(messageIndex);
-    if (turnIndex === null || turnIndex < 0 || !sessionId) return;
-    setVotes((v) => ({ ...v, [messageIndex]: helpful }));
-    try {
-      await submitChatFeedback({ session_id: sessionId, turn_index: turnIndex, helpful });
-    } catch {
-      // Analytics only: a failed vote must never disturb the conversation.
-      setVotes((v) => {
-        const next = { ...v };
-        delete next[messageIndex];
-        return next;
-      });
-    }
-  }
   const restoredRef = useRef(false);
   const { connected, sessionId, stage, pendingText, transport, sendMessage, switchSession } = useChatStream(
     typeof localStorage !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null
@@ -330,32 +302,6 @@ export default function Chatbot() {
                   <div className="mt-2 text-xs opacity-70">intent carried over from the previous turn</div>
                 )}
                 {m.response && <ChatAnswerCard response={m.response} />}
-                {m.role === "assistant" && m.response && (
-                  <div className="mt-2 flex items-center gap-1 border-t border-gray-200 pt-1.5 text-xs text-gray-500">
-                    <span>Was this helpful?</span>
-                    <button
-                      type="button"
-                      onClick={() => void vote(i, true)}
-                      disabled={votes[i] !== undefined}
-                      className={`rounded px-1.5 py-0.5 ${votes[i] === true ? "bg-green-200 text-green-900" : "hover:bg-gray-200"}`}
-                      aria-label="Mark answer helpful"
-                      title="Helpful"
-                    >
-                      👍
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void vote(i, false)}
-                      disabled={votes[i] !== undefined}
-                      className={`rounded px-1.5 py-0.5 ${votes[i] === false ? "bg-red-200 text-red-900" : "hover:bg-gray-200"}`}
-                      aria-label="Mark answer not helpful"
-                      title="Not helpful"
-                    >
-                      👎
-                    </button>
-                    {votes[i] !== undefined && <span className="text-green-700">Thanks!</span>}
-                  </div>
-                )}
                 {Array.isArray(m.response?.data?.sources) && m.response.data.sources.length > 0 && (
                   <div className="mt-2 text-[11px] text-gray-500">
                     Based on: {m.response.data.sources.map((source) => {

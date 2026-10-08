@@ -76,6 +76,34 @@ class GroqClient:
         except Exception as e:  # noqa: BLE001
             raise LLMUnavailableError(str(e)) from e
 
+    def stream_text(self, system_prompt: str, user_message: str):
+        """Yield the phrased response in chunks (real token streaming).
+
+        Same prompt/contract as `complete_text`, but lazy, so the caller can
+        forward each chunk to a live client (see app/routers/ws.py). Raises
+        LLMUnavailableError on any failure -- callers fall back to the
+        deterministic template formatter, exactly like the non-streaming path.
+        """
+        try:
+            client = self._get_client()
+            stream = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                temperature=0.3,
+                stream=True,
+            )
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+        except Exception as e:  # noqa: BLE001
+            raise LLMUnavailableError(str(e)) from e
+
 
 class GeminiClient:
     """Gemini REST client implementing the same narrow interface as GroqClient.
@@ -227,31 +255,3 @@ def build_llm_client():
     if groq_key:
         return GroqClient()
     return None
-
-    def stream_text(self, system_prompt: str, user_message: str):
-        """Yield the phrased response in chunks (real token streaming).
-
-        Same prompt/contract as `complete_text`, but lazy, so the caller can
-        forward each chunk to a live client (see app/routers/ws.py). Raises
-        LLMUnavailableError on any failure -- callers fall back to the
-        deterministic template formatter, exactly like the non-streaming path.
-        """
-        try:
-            client = self._get_client()
-            stream = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message},
-                ],
-                temperature=0.3,
-                stream=True,
-            )
-            for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta.content
-                if delta:
-                    yield delta
-        except Exception as e:  # noqa: BLE001
-            raise LLMUnavailableError(str(e)) from e

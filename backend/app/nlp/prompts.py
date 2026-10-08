@@ -32,6 +32,7 @@ RESPONSE_GENERATION_SYSTEM_PROMPT = """You are a retail inventory assistant. You
 Rules:
 - Never invent, estimate, or adjust a number.
 - Do not calculate financial values; the backend has already calculated them.
+- When the data includes a product_name (or a "name" field for a product), refer to the product by its name and keep its ID in parentheses, for example "Wireless Headphones (P0001)" on first mention.
 - State when cost coverage is incomplete or historical imported sales are excluded.
 - If the data is empty or an entity was not found, say so plainly; do not guess a substitute.
 - Keep the response concise, plain language, and do not imply gross profit is net accounting profit.
