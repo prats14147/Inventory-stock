@@ -13,9 +13,9 @@ const links = [
   { to: "/forecast", label: "Forecast" },
   { to: "/stockout", label: "Stockout Risk" },
   { to: "/reorder", label: "Reorder" },
-  { to: "/live", label: "Live" },
+  // { to: "/live", label: "Live" },
   { to: "/watchlist", label: "Watchlist" },
-  { to: "/model-health", label: "Model Health" },
+  // { to: "/model-health", label: "Model Health" },
   { to: "/settings", label: "Settings" },
   { to: "/chat", label: "Chatbot" },
 ];
