@@ -9,6 +9,7 @@ from app.models.sales import SalesTransaction
 from app.models.store import Store
 from app.models.system_setting import SystemSetting
 from app.models.watchlist import WatchlistItem
+from app.models.user_account import PasswordResetToken, UserAccount
 
 __all__ = [
     "Base",
@@ -23,4 +24,6 @@ __all__ = [
     "WatchlistItem",
     "PurchaseOrder",
     "SystemSetting",
+    "UserAccount",
+    "PasswordResetToken",
 ]

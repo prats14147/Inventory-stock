@@ -5,8 +5,9 @@
 
 import { NavLink } from "react-router-dom";
 import { AlertsBell } from "./AlertsDrawer";
+import type { AuthUser } from "../services/api";
 
-const links = [
+const links: { to: string; label: string; end?: boolean }[] = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/inventory", label: "Inventory" },
   { to: "/sales", label: "Sales" },
@@ -16,11 +17,15 @@ const links = [
   // { to: "/live", label: "Live" },
   { to: "/watchlist", label: "Watchlist" },
   // { to: "/model-health", label: "Model Health" },
-  { to: "/settings", label: "Settings" },
-  { to: "/chat", label: "Chatbot" },
 ];
 
-export default function Nav({ onSignOut }: { onSignOut: () => void }) {
+export default function Nav({ user, onSignOut }: { user: AuthUser; onSignOut: () => void }) {
+  const visibleLinks = [
+    ...links,
+    ...(user.role === "admin" ? [{ to: "/settings", label: "Settings" }] : []),
+    ...(user.role !== "viewer" ? [{ to: "/chat", label: "Chatbot" }] : []),
+    { to: "/account", label: "Account" },
+  ];
   return (
     <nav className="sticky top-0 z-10 border-b border-gray-200 bg-white/95 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center gap-1 overflow-x-auto px-4 py-3">
@@ -30,7 +35,7 @@ export default function Nav({ onSignOut }: { onSignOut: () => void }) {
           </span>
           InventoryAI
         </span>
-        {links.map((link) => (
+        {visibleLinks.map((link) => (
           <NavLink
             key={link.to}
             to={link.to}
@@ -47,7 +52,8 @@ export default function Nav({ onSignOut }: { onSignOut: () => void }) {
           </NavLink>
         ))}
         <AlertsBell />
-        <button onClick={onSignOut} className="ml-auto shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900">Sign out</button>
+        <span className="ml-auto shrink-0 text-xs text-gray-500">{user.display_name} · {user.role}</span>
+        <button onClick={onSignOut} className="shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900">Sign out</button>
       </div>
     </nav>
   );

@@ -349,11 +349,26 @@ def _tool_stockout_risk(db: Session, entities: Entities) -> dict:
     if entities.product_id:
         return stockout_service.calculate_stockout_risk(db, entities.product_id).model_dump(mode="json")
     listing = inventory_service.get_current_inventory_listing(db)
-    product_ids = sorted({row.product_id for row in listing.items})
-    results = [stockout_service.calculate_stockout_risk(db, product_id).model_dump(mode="json")
-               for product_id in product_ids]
+    pairs = sorted({(row.product_id, row.store_id) for row in listing.items})
+    results = []
+    for product_id, store_id in pairs:
+        try:
+            results.append(
+                stockout_service.calculate_stockout_risk(
+                    db, product_id, store_id=store_id
+                ).model_dump(mode="json")
+            )
+        except NotFoundError:
+            continue
     at_risk = [item for item in results if item["risk"] != "LOW"]
-    at_risk.sort(key=lambda item: (0 if item["risk"] == "HIGH" else 1, item["product_id"]))
+    at_risk.sort(
+        key=lambda item: (
+            0 if item["risk"] == "HIGH" else 1,
+            item["estimated_days_of_stock"] if item["estimated_days_of_stock"] is not None else float("inf"),
+            item["product_id"],
+            item["store_id"] or "",
+        )
+    )
     return {"items": at_risk, "products_checked": len(results), "as_of_date": listing.as_of_date.isoformat() if listing.as_of_date else None}
 
 
@@ -483,15 +498,23 @@ def _template_response(intent: Intent, entities: Entities, data: dict) -> str:
         threshold = data.get("threshold")
         as_of = data.get("as_of_date")
         if not items:
-            return f"Nothing is below the {threshold}-unit low-stock threshold as of {as_of}."
+            return (
+                f"No forecast-scored product/store rows are below their lead-time demand plus safety-stock target "
+                f"as of {as_of}. The {threshold}-unit threshold is only used as a fallback when sales history is unavailable."
+            )
         top = items[:8]
         listing = "; ".join(
-            f"{_product_label(item.get('product_id'), item.get('product_name'), f'{item.get('inventory_level')} on hand')} at {item.get('store_id')}"
+            (
+                f"{_product_label(item.get('product_id'), item.get('product_name'), f'{item.get('inventory_level')} on hand')} at {item.get('store_id')} "
+                f"({item.get('risk_level', 'UNSCORED').lower()} risk, {item['estimated_days_of_stock']:.1f} days of cover)"
+                if item.get("estimated_days_of_stock") is not None
+                else f"{_product_label(item.get('product_id'), item.get('product_name'), f'{item.get('inventory_level')} on hand')} at {item.get('store_id')} (unscored)"
+            )
             for item in top
         )
         extra = f" — plus {len(items) - len(top)} more" if len(items) > len(top) else ""
         return (
-            f"{len(items)} store-product combinations are below {threshold} units as of {as_of}: "
+            f"{len(items)} product/store rows need attention as of {as_of}: "
             f"{listing}{extra}."
         )
     if intent == Intent.LOW_STOCK_FAST_SELLING:
@@ -533,18 +556,20 @@ def _template_response(intent: Intent, entities: Entities, data: dict) -> str:
     if intent == Intent.DEMAND_FORECAST:
         product = _product_label(data["product_id"], data.get("product_name"))
         return (
-            f"Forecast demand for {product} over the next {data['model_horizon_days']} days "
-            f"(by {data['target_date']}) is approximately {data['forecast_total_units']:.0f} units across all stores."
+            f"For {product}, the model predicts about {data['predicted_units_on_target_date']:.0f} units "
+            f"on {data['target_date']} across all stores ({data['model_horizon_days']} days ahead). "
+            "This is a prediction for that one date, not the total demand across the full 7/14-day period. "
+            f"On the historical holdout, the model's MAE was about {data['model_test_mae']:.1f} units per store-product prediction."
         )
     if intent == Intent.STOCKOUT_RISK:
         if "items" in data:
             if not data["items"]:
-                return f"None of the {data['products_checked']} products checked are currently at medium or high stockout risk (inventory as of {data['as_of_date']})."
+                return f"None of the {data['products_checked']} product-store combinations checked are currently at medium or high stockout risk (inventory as of {data['as_of_date']})."
             summary = "; ".join(
-                f"{_product_label(item['product_id'], item.get('product_name') or item.get('name'), f'{item['risk'].lower()} risk')}"
+                f"{_product_label(item['product_id'], item.get('product_name') or item.get('name'))} at {item.get('store_id')}: {item['risk'].lower()} risk"
                 for item in data["items"][:8]
             )
-            return f"Products at medium or high stockout risk as of {data['as_of_date']}: {summary}. {data['products_checked']} products checked."
+            return f"Product-store combinations at medium or high stockout risk as of {data['as_of_date']}: {summary}. {data['products_checked']} combinations checked."
         product = _product_label(data["product_id"], data.get("product_name") or data.get("name"))
         return f"{product} has {data['risk']} stockout risk. {data['reason']}"
     if intent == Intent.REORDER_RECOMMENDATION:

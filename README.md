@@ -347,20 +347,39 @@ See `.env.example` for the full list with comments.
 
 ### Sign-in and deployment safety
 
-The API now requires a bearer token for `/api/*` data routes (except the
-health check and sign-in endpoint). The website shows a sign-in page, and
-tokens expire after the configured lifetime. The starter setup has one
-deployment-configured operator account; it does not provide user registration
-or per-user roles yet. Keep the username/password and token secret in the
-server's untracked `.env` (fill in the three blank `AUTH_*` fields before
-signing in), and set `CORS_ALLOWED_ORIGINS` to the exact trusted
-website origin(s), comma-separated. The API rejects `*`.
+The API requires a bearer token for protected `/api/*` routes. The public
+landing page links to sign-in, and authenticated pages are protected by the
+frontend and backend. Users live in PostgreSQL and passwords are stored as
+PBKDF2-SHA256 hashes. Short-lived tokens are invalidated when an account is
+disabled, its role changes, or its password changes.
 
-Before exposing the app online, use HTTPS, strong unique credentials, and a
-random `AUTH_TOKEN_SECRET` of at least 32 characters. Do not commit `.env` or
-share a common login with people who should have different permissions. For
-multiple staff accounts and separate read-only/editor/admin roles, add a user
-table and account-management workflow as the next step.
+On a fresh database, `AUTH_ADMIN_USERNAME` and `AUTH_ADMIN_PASSWORD` in the
+server's untracked `.env` bootstrap the first admin account at the first
+successful sign-in. These credentials are only used for that initial account;
+afterward the database password hash is authoritative. Set
+`AUTH_ADMIN_EMAIL`, use a unique strong bootstrap password, and replace
+`AUTH_TOKEN_SECRET` with a unique random secret of at least 32 characters.
+An admin creates staff accounts from **Account & access**; each new user gets
+a role and must change the temporary password at first sign-in.
+
+Roles are enforced by the API, not only hidden in the UI:
+
+- **Admin**: manage accounts and system settings, plus all operational pages.
+- **Manager**: read and change inventory, products, sales, purchase orders, and
+  use the project chatbot; cannot manage accounts or system settings.
+- **Viewer**: read-only API access; no write requests or chatbot actions.
+
+Password resets use one-time links that expire after 30 minutes. Configure
+`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`,
+`SMTP_USE_SSL`, and `FRONTEND_BASE_URL` in the deployment environment before
+expecting reset emails. Without SMTP, the app returns a non-enumerating generic
+message but cannot deliver a link. The reset token is random, stored only as a
+hash, and invalidated after use. Set `CORS_ALLOWED_ORIGINS` to the exact
+trusted website origin(s), comma-separated; the API rejects `*`.
+
+Before exposing the app online, use HTTPS and keep `.env` out of Git. Configure
+SMTP and the deployed website URL, then verify the initial administrator can
+sign in, create staff accounts, and recover an account by email.
 
 ## Running the Application
 ```bash
@@ -433,8 +452,8 @@ safety-stock assumptions, and the NLP network-testing limitation.
 ## Future Improvements
 - **Per-store forecasting**: train store-level models instead of apportioning
   the product total evenly for store-scoped risk/reorder.
-- **Multi-user roles**: user table with read-only/editor/admin roles instead of
-  a single operator account.
+- **Distributed login throttling**: enforce credential and reset-attempt
+  limits at the reverse proxy or shared cache when running multiple instances.
 - **Multi-worker live hub**: publish live frames through Redis pub/sub (or
   Postgres `LISTEN/NOTIFY`) so the stream survives multiple uvicorn workers.
 - **Real supplier data**: replace the `DEFAULT_LEAD_TIME_DAYS` assumption with

@@ -100,6 +100,9 @@ def upsert_inventory(payload: InventoryUpsertRequest, db: Session = Depends(get_
 
     db.commit()
 
+    from app.services.stockout_service import clear_risk_cache
+    clear_risk_cache()
+
     return InventoryUpsertResponse(
         date=as_of,
         product_id=payload.product_id,
@@ -164,7 +167,7 @@ def export_inventory_csv(
 def low_stock(
     threshold: int | None = Query(
         None,
-        description="Override the default low-stock threshold",
+        description="Override the minimum-unit fallback used only when a product/store has no usable forecast history",
     ),
     db: Session = Depends(get_db),
 ):

@@ -1,7 +1,7 @@
 """
 backend/app/services/stockout_service.py
 
-Deterministic stockout-risk engine (spec section 25). NOT an ML model --
+Deterministic stockout-risk engine. NOT a separate ML classifier --
 a transparent, documented formula:
 
     required_inventory = forecast_demand_during_lead_time + safety_stock
@@ -115,26 +115,34 @@ def _compute_stockout_risk(
             raise _NotFound(f"No inventory record for product '{product_id}' at store '{store_id}'.")
         current_inventory = float(sum(s.inventory_level for s in store_rows))
         as_of_date = current.as_of_date
-        store_count = max(1, len(current.stores))
     else:
         current_inventory = current.total_inventory
         as_of_date = current.as_of_date
-        store_count = None
 
     product = product_repository.get_product(db, product_id)
     name = product.name if product else product_id
     sku = product.sku if product else product_id
     category = product.category if product else "Unknown"
 
-    demand_info = forecast_service.forecast_daily_rate_and_history_std(db, product_id, effective_lead_time)
-    if store_id and store_count:
-        # Product forecast is summed across stores; apportion evenly for a
-        # store-specific evaluation and say so in the reason/assumptions.
-        forecast_lead_time_demand = demand_info["forecast_lead_time_demand"] / store_count
-        demand_std = demand_info["historical_daily_demand_std"] / store_count
+    if store_id:
+        demand_info = forecast_service.forecast_daily_rate_and_history_std(
+            db, product_id, effective_lead_time, store_id=store_id
+        )
     else:
-        forecast_lead_time_demand = demand_info["forecast_lead_time_demand"]
-        demand_std = demand_info["historical_daily_demand_std"]
+        demand_info = forecast_service.forecast_daily_rate_and_history_std(
+            db, product_id, effective_lead_time
+        )
+    forecast_daily_demand = demand_info["forecast_daily_rate"]
+    forecast_lead_time_demand = demand_info["forecast_lead_time_demand"]
+    demand_std = demand_info["historical_daily_demand_std"]
+    estimated_days_of_stock = (
+        current_inventory / forecast_daily_demand if forecast_daily_demand > 0 else None
+    )
+    coverage_description = (
+        f"{estimated_days_of_stock:.1f} days"
+        if estimated_days_of_stock is not None
+        else "undefined because predicted daily demand is zero"
+    )
 
     safety_stock = demand_std * safety_factor
     required_inventory = forecast_lead_time_demand + safety_stock
@@ -144,14 +152,16 @@ def _compute_stockout_risk(
         reason = (
             f"Current inventory ({current_inventory:.0f}) is below the forecast demand for the "
             f"{effective_lead_time}-day lead time alone ({forecast_lead_time_demand:.1f}), before even "
-            f"accounting for safety stock."
+            f"accounting for safety stock. Estimated coverage is "
+            f"{coverage_description} versus {effective_lead_time} lead-time days."
         )
     elif current_inventory < required_inventory:
         risk = RiskLevel.MEDIUM
         reason = (
             f"Current inventory ({current_inventory:.0f}) covers the forecast lead-time demand "
             f"({forecast_lead_time_demand:.1f}) but not the recommended safety-stock buffer of "
-            f"{safety_stock:.1f} (required: {required_inventory:.1f})."
+            f"{safety_stock:.1f} (required: {required_inventory:.1f}); estimated coverage is "
+            f"{coverage_description}."
         )
     else:
         risk = RiskLevel.LOW
@@ -160,7 +170,7 @@ def _compute_stockout_risk(
             f"({forecast_lead_time_demand:.1f}) and the safety-stock buffer ({safety_stock:.1f})."
         )
 
-    scope_note = f" Store scope: {store_id} (product demand apportioned evenly across {store_count} stores)." if store_id else ""
+    scope_note = f" Store scope: {store_id}; demand comes from that store's own forecast and history." if store_id else " Product scope: inventory and demand are summed across stores."
     reason = reason + scope_note
     return StockoutRiskResponse(
         product_id=product_id,
@@ -172,6 +182,8 @@ def _compute_stockout_risk(
         current_inventory=current_inventory,
         lead_time_days=effective_lead_time,
         forecast_model_horizon_used=demand_info["forecast_model_horizon_used"],
+        forecast_daily_demand=forecast_daily_demand,
+        estimated_days_of_stock=estimated_days_of_stock,
         forecast_lead_time_demand=forecast_lead_time_demand,
         safety_stock=safety_stock,
         required_inventory=required_inventory,

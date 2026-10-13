@@ -67,7 +67,7 @@ export default function NeedsAttentionPanel({
           </p>
 
           <p className="mt-1 text-xs text-green-700">
-            Every product covers its forecast demand plus the safety-stock buffer.
+            Every scored product/store row covers its forecast demand plus the safety-stock buffer.
           </p>
 
           <Link
@@ -92,7 +92,7 @@ export default function NeedsAttentionPanel({
   return (
     <Card
       title="Needs attention today"
-      subtitle={`${items.length} product${
+      subtitle={`${items.length} product/store row${
         items.length === 1 ? "" : "s"
       } at medium or high risk${
         asOfDate
@@ -179,7 +179,7 @@ export default function NeedsAttentionPanel({
 
         {items.map((item) => (
           <li
-            key={item.product_id}
+            key={item.product_id + "-" + item.store_id}
             className="flex flex-wrap items-center justify-between gap-3 py-2.5"
           >
             <div className="min-w-0 flex-1">
@@ -213,7 +213,7 @@ export default function NeedsAttentionPanel({
               </div>
 
               <p className="mt-0.5 text-xs text-gray-500">
-                On hand{" "}
+                {item.store_id} · On hand{" "}
                 {Math.round(
                   item.current_inventory
                 ).toLocaleString()}{" "}
@@ -266,7 +266,7 @@ export default function NeedsAttentionPanel({
             to="/stockout"
             className="text-brand-700 hover:underline"
           >
-            See all at-risk products
+          See all at-risk product/store rows
           </Link>
           .
         </p>

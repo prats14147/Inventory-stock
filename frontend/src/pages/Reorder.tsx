@@ -200,7 +200,7 @@ export default function Reorder() {
           onChange={(e) => setStoreId(e.target.value)}
           className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
           aria-label="Store-level reorder scope"
-          title="Store-level reorder apportions product demand evenly across stores"
+          title="Store-level reorder uses that store's own point forecast and sales history"
         >
           <option value="">All stores (product total)</option>
           {STORES.map((s) => (

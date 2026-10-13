@@ -45,9 +45,10 @@ PostgreSQL (backend/app/models/* + Alembic migrations)
 - **Repositories** own every query: per-module SQLAlchemy selects, plus two
   process caches for immutable history (`get_full_history_dataframe_cached`,
   risk-result cache with TTL + `clear_risk_cache()` on any write).
-- **Auth** sits in middleware (`protect_api` in `app/main.py`): every
-  `/api/*` route except health/login requires a bearer token; WebSockets
-  check identity before `accept()` and close with `1008` otherwise.
+- **Auth** sits in middleware (`protect_api` in `app/main.py`): protected
+  `/api/*` routes resolve a short-lived bearer token to an active database
+  account. The API enforces Admin/Manager/Viewer write permissions; WebSockets
+  validate the same revocable session before `accept()`.
 
 Key invariant: `dashboard_service` computes **nothing new** — it calls the
 same services the detail pages use, so the summary can never drift from the
@@ -114,7 +115,7 @@ All knobs below are admin-editable on `/settings` (PostgreSQL
 `system_settings` overrides env defaults via `settings_service`).
 
 ```
-forecast_lead_time_demand = (model_forecast_total / model_horizon) × lead_time_days
+forecast_lead_time_demand = predicted_units_on_target_date × lead_time_days
 safety_stock              = historical_daily_demand_std × safety_stock_service_factor
 required_inventory        = forecast_lead_time_demand + safety_stock
 
@@ -127,9 +128,13 @@ reorder_quantity = max(0, forecast_lead_time_demand + safety_stock − current_i
 
 - `lead_time_days` defaults to `DEFAULT_LEAD_TIME_DAYS` (7) — echoed in every
   response because the dataset has no real supplier lead time.
-- Store scope (`?store_id=S001…S005`) evaluates one store's on-hand against
-  that store's apportioned share (product demand ÷ stores carrying it),
-  disclosed in `reason`/`assumptions` — a stepping stone to per-store models.
+- Store-scoped risk uses that store's own future-date point prediction and
+  historical daily-sales variability. Product-scoped risk sums stock and
+  demand across stores. The lead-time total remains an approximation: it
+  assumes the single target-date daily prediction holds throughout lead time.
+- Low-stock and stockout-risk lists use the same risk tiers for forecastable
+  product/store rows. The configured unit threshold is only a fallback for
+  inventory with insufficient sales history.
 - **DELIVERY guard** (`inventory_service.adjust_stock`): a receipt must be
   positive and may not exceed outstanding `units_ordered` (it decrements the
   reservation as it lands); stock can never go negative.

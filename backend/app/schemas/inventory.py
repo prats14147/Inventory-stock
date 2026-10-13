@@ -61,11 +61,16 @@ class LowStockItem(BaseModel):
     region: str
     inventory_level: int
     units_ordered: int
+    risk_level: str
+    forecast_daily_demand: float | None = None
+    estimated_days_of_stock: float | None = None
+    reason: str
 
 
 class LowStockResponse(BaseModel):
     as_of_date: date
     threshold: int
+    threshold_fallback_only: bool = True
     items: list[LowStockItem]
     count: int
 

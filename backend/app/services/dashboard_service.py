@@ -51,22 +51,30 @@ def get_dashboard_summary(db: Session) -> DashboardSummaryResponse:
 
     product_ids = product_repository.list_product_ids(db)
     headline = inventory_repository.get_inventory_headline(db)
+    inventory_listing = inventory_service.get_current_inventory_listing(db)
+    product_store_pairs = sorted(
+        {(row.product_id, row.store_id) for row in inventory_listing.items}
+    )
+    cached_before_compute = {
+        (pid, sid): stockout_service.was_cached(pid, store_id=sid)
+        for pid, sid in product_store_pairs
+    }
     low_stock = inventory_service.get_low_stock(db)
     low_stock_count = low_stock.count
     category_sales = sales_service.get_category_analysis(db)
     top_products = sales_service.get_top_products(db, limit=5).products
 
-    # Asked BEFORE the loop: after it, every product is cached by definition,
-    # so checking afterwards would always report True.
-    cached_before_compute = {pid: stockout_service.was_cached(pid) for pid in product_ids}
     risks = []
-    for pid in product_ids:
+    for pid, sid in product_store_pairs:
         try:
-            risks.append(stockout_service.calculate_stockout_risk(db, pid))
+            risks.append(stockout_service.calculate_stockout_risk(db, pid, store_id=sid))
         except NotFoundError:
             # New products have inventory but no sales history to forecast yet.
             continue
-    served_from_cache = all(cached_before_compute[r.product_id] for r in risks)
+    served_from_cache = all(
+        cached_before_compute.get((r.product_id, r.store_id or ""), False)
+        for r in risks
+    )
 
     high = [r for r in risks if r.risk.value == "HIGH"]
     medium = [r for r in risks if r.risk.value == "MEDIUM"]
@@ -81,7 +89,9 @@ def get_dashboard_summary(db: Session) -> DashboardSummaryResponse:
     needs_attention: list[NeedsAttentionItem] = []
     for risk in at_risk[:NEEDS_ATTENTION_LIMIT]:
         try:
-            reorder = reorder_service.calculate_reorder(db, risk.product_id, risk.lead_time_days)
+            reorder = reorder_service.calculate_reorder(
+                db, risk.product_id, risk.lead_time_days, store_id=risk.store_id
+            )
             qty = reorder.recommended_reorder_quantity
             product_name = reorder.name
             product_sku = reorder.sku
@@ -99,6 +109,7 @@ def get_dashboard_summary(db: Session) -> DashboardSummaryResponse:
                 name=product_name,
                 sku=product_sku,
                 category=product_category,
+                store_id=risk.store_id or "",
                 risk=risk.risk,
                 current_inventory=risk.current_inventory,
                 required_inventory=risk.required_inventory,
@@ -107,7 +118,7 @@ def get_dashboard_summary(db: Session) -> DashboardSummaryResponse:
             )
         )
 
-    # Low stock preview (top 5 by lowest inventory)
+    # Low-stock preview uses the same risk/coverage order as the full list.
     low_stock_items: list[LowStockItem] = []
     for item in low_stock.items[:LOW_STOCK_PREVIEW_LIMIT]:
         product = product_repository.get_product(db, item.product_id)
@@ -120,6 +131,10 @@ def get_dashboard_summary(db: Session) -> DashboardSummaryResponse:
                 store_id=item.store_id,
                 inventory_level=item.inventory_level,
                 threshold=low_stock.threshold,
+                risk_level=item.risk_level,
+                forecast_daily_demand=item.forecast_daily_demand,
+                estimated_days_of_stock=item.estimated_days_of_stock,
+                reason=item.reason,
             )
         )
 

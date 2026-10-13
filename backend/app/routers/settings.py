@@ -5,7 +5,7 @@ Admin operations knobs, DB-backed with env-var defaults.
 Editable keys:
   default_lead_time_days        int   (supplier lead time assumption)
   safety_stock_service_factor   float (safety-stock z-score/service factor)
-  low_stock_threshold           int   (low-stock listing threshold)
+  low_stock_threshold           int   (fallback floor when sales history is insufficient for a forecast)
 
 GET  /api/settings              -- current effective values + source of each
 PUT  /api/settings              -- upsert one or more keys (validated)
@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 EDITABLE = {
     "default_lead_time_days": (int, 1, 90, "Supplier lead time assumption in days (no real lead time in dataset)"),
     "safety_stock_service_factor": (float, 0.0, 5.0, "Safety-stock service factor / z-score multiplier on demand std"),
-    "low_stock_threshold": (int, 1, 10000, "Inventory level below which a store-product row counts as low stock"),
+    "low_stock_threshold": (int, 1, 10000, "Fallback minimum units for a store-product row without enough sales history to calculate stock coverage"),
 }
 
 # Ensure the table exists even on databases created before this router landed

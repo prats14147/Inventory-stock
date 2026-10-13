@@ -47,12 +47,58 @@ def get_product_inventory(db: Session, product_id: str, as_of: date | None = Non
 
 def get_low_stock(db: Session, threshold: int | None = None, as_of: date | None = None) -> LowStockResponse:
     from app.services.settings_service import effective_low_stock_threshold
+    from app.services.stockout_service import calculate_stockout_risk
     effective_threshold = effective_low_stock_threshold(db, threshold)
 
     as_of_date = as_of or inventory_repository.get_latest_date(db)
-    rows = inventory_repository.get_low_stock_rows(db, effective_threshold, as_of=as_of)
+    rows = inventory_repository.get_all_current_inventory(db, as_of=as_of)
 
-    items = [LowStockItem(**row) for row in rows]
+    items: list[LowStockItem] = []
+    for row in rows:
+        try:
+            risk = calculate_stockout_risk(
+                db, row["product_id"], store_id=row["store_id"]
+            )
+        except NotFoundError:
+            # A newly added item without forecast history cannot receive a
+            # model-based coverage score. Keep zero/very-low stock visible
+            # using the configured unit floor, and label it unscored.
+            if row["inventory_level"] >= effective_threshold:
+                continue
+            items.append(
+                LowStockItem(
+                    **row,
+                    risk_level="UNSCORED",
+                    forecast_daily_demand=None,
+                    estimated_days_of_stock=None,
+                    reason=(
+                        f"No usable sales history is available for a demand forecast. "
+                        f"Shown because stock is below the {effective_threshold}-unit fallback floor."
+                    ),
+                )
+            )
+            continue
+
+        if risk.risk.value == "LOW":
+            continue
+        items.append(
+            LowStockItem(
+                **row,
+                risk_level=risk.risk.value,
+                forecast_daily_demand=risk.forecast_daily_demand,
+                estimated_days_of_stock=risk.estimated_days_of_stock,
+                reason=risk.reason,
+            )
+        )
+
+    risk_order = {"HIGH": 0, "MEDIUM": 1, "UNSCORED": 2}
+    items.sort(
+        key=lambda item: (
+            risk_order.get(item.risk_level, 3),
+            item.estimated_days_of_stock if item.estimated_days_of_stock is not None else float("inf"),
+            item.inventory_level,
+        )
+    )
     return LowStockResponse(
         as_of_date=as_of_date,
         threshold=effective_threshold,

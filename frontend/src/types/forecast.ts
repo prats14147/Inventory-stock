@@ -10,6 +10,9 @@ export interface ForecastResponse {
   requested_horizon_days: number;
   model_horizon_days: number;
   target_date: string;
+  predicted_units_on_target_date: number;
+  prediction_semantics: string;
+  baseline_mae: number;
   forecast_total_units: number;
   per_store: StoreForecast[];
   model_test_mae: number;

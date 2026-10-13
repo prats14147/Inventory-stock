@@ -176,8 +176,8 @@ export default function Forecast() {
         date: forecast7.data.target_date,
         label: formatDateLabel(forecast7.data.target_date),
         historical_units: null,
-        forecast_units: forecast7.data.forecast_total_units,
-        forecast7_units: forecast7.data.forecast_total_units,
+        forecast_units: forecast7.data.predicted_units_on_target_date,
+        forecast7_units: forecast7.data.predicted_units_on_target_date,
         forecast14_units: null,
         isForecast: true,
       });
@@ -188,9 +188,9 @@ export default function Forecast() {
         date: forecast14.data.target_date,
         label: formatDateLabel(forecast14.data.target_date),
         historical_units: null,
-        forecast_units: forecast14.data.forecast_total_units,
+        forecast_units: forecast14.data.predicted_units_on_target_date,
         forecast7_units: null,
-        forecast14_units: forecast14.data.forecast_total_units,
+        forecast14_units: forecast14.data.predicted_units_on_target_date,
         isForecast: true,
       });
     }
@@ -344,8 +344,8 @@ export default function Forecast() {
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
-              label="Forecast demand at target date"
-              value={`${selectedForecast.forecast_total_units.toFixed(0)} units`}
+              label="Predicted units on target date"
+              value={`${selectedForecast.predicted_units_on_target_date.toFixed(0)} units`}
               hint={`Target date: ${selectedForecast.target_date}`}
               accent="info"
             />
@@ -358,11 +358,9 @@ export default function Forecast() {
             />
 
             <StatCard
-              label="Model test MAE"
+              label="Holdout MAE per store/day"
               value={selectedForecast.model_test_mae.toFixed(1)}
-              hint={`Improvement over baseline: ~${
-                selectedForecast.baseline_improvement_pct ?? 5
-              }%`}
+              hint={`Baseline MAE ${selectedForecast.baseline_mae.toFixed(1)}; XGBoost improved by ${(selectedForecast.baseline_improvement_pct ?? 0).toFixed(1)}%`}
             />
 
             <StatCard
@@ -494,18 +492,18 @@ export default function Forecast() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {forecast7.data && (
               <StatCard
-                label="7-day forecast"
-                value={`${forecast7.data.forecast_total_units.toFixed(0)} units`}
-                hint={`Target date: ${forecast7.data.target_date}`}
+                label="7-day-ahead point prediction"
+                value={`${forecast7.data.predicted_units_on_target_date.toFixed(0)} units`}
+                hint={`For one day: ${forecast7.data.target_date}`}
                 accent={horizon === 7 ? "info" : "default"}
               />
             )}
 
             {forecast14.data && (
               <StatCard
-                label="14-day forecast"
-                value={`${forecast14.data.forecast_total_units.toFixed(0)} units`}
-                hint={`Target date: ${forecast14.data.target_date}`}
+                label="14-day-ahead point prediction"
+                value={`${forecast14.data.predicted_units_on_target_date.toFixed(0)} units`}
+                hint={`For one day: ${forecast14.data.target_date}`}
                 accent={horizon === 14 ? "info" : "default"}
               />
             )}
@@ -516,7 +514,7 @@ export default function Forecast() {
               title="Side-by-side comparison"
               subtitle={
                 compareForecast.data
-                  ? `${selectedForecast.product_id} (${selectedForecast.forecast_total_units.toFixed(0)} units) vs ${compareForecast.data.product_id} (${compareForecast.data.forecast_total_units.toFixed(0)} units)`
+                  ? `${selectedForecast.product_id} (${selectedForecast.predicted_units_on_target_date.toFixed(0)} units on target date) vs ${compareForecast.data.product_id} (${compareForecast.data.predicted_units_on_target_date.toFixed(0)} units on target date)`
                   : "Pick a second product above to compare per-store demand."
               }
             >

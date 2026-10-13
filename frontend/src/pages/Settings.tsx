@@ -1,7 +1,7 @@
 // frontend/src/pages/Settings.tsx
 //
 // Admin operations knobs: supplier lead time, safety-stock factor, and the
-// low-stock threshold. Stored in PostgreSQL (system_settings), env vars stay
+// minimum-stock fallback for rows without forecast history. Stored in PostgreSQL (system_settings), env vars stay
 // the defaults. Saving clears the risk cache so the next read recomputes.
 
 import { FormEvent, useState } from "react";
@@ -14,7 +14,7 @@ import Card from "../components/Card";
 const FIELDS = [
   { key: "default_lead_time_days", label: "Default lead time (days)", step: "1", min: 1, max: 90 },
   { key: "safety_stock_service_factor", label: "Safety-stock service factor (z-score)", step: "0.05", min: 0, max: 5 },
-  { key: "low_stock_threshold", label: "Low-stock threshold (units)", step: "1", min: 1, max: 10000 },
+  { key: "low_stock_threshold", label: "Fallback minimum stock (units)", step: "1", min: 1, max: 10000 },
 ] as const;
 
 type FieldKey = (typeof FIELDS)[number]["key"];
@@ -68,7 +68,7 @@ export default function Settings() {
     <div className="space-y-6">
       <PageHeader
         title="System Settings"
-        subtitle="Operations assumptions every risk and reorder figure is built on. Edits apply immediately — no redeploy."
+        subtitle="Risk uses forecast demand and days of stock coverage. The unit floor applies only when sales history is insufficient for a forecast."
       />
 
       <Card title="Inventory policy" subtitle="A row in system_settings overrides the environment default.">

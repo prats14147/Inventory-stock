@@ -22,6 +22,8 @@ class StockoutRiskResponse(BaseModel):
     current_inventory: float
     lead_time_days: int
     forecast_model_horizon_used: int
+    forecast_daily_demand: float = 0.0
+    estimated_days_of_stock: float | None = None
     forecast_lead_time_demand: float
     safety_stock: float
     required_inventory: float

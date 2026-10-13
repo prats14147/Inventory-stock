@@ -237,6 +237,7 @@ export const signIn = async (
     access_token: string;
     token_type: string;
     expires_in: number;
+    user: AuthUser;
   }>(
     "/api/auth/login",
     {
@@ -256,9 +257,36 @@ export const signIn = async (
 };
 
 export const getCurrentUser = () =>
-  request<{
-    username: string;
-  }>("/api/auth/me");
+  request<AuthUser>("/api/auth/me");
+
+export type AccountRole = "admin" | "manager" | "viewer";
+
+export type AuthUser = {
+  id: number;
+  username: string;
+  email: string;
+  display_name: string;
+  role: AccountRole;
+  is_active: boolean;
+  must_change_password: boolean;
+  created_at: string;
+};
+
+export const signOut = () => request<{ message: string }>("/api/auth/logout", { method: "POST" });
+export const updateMyProfile = (payload: { email: string; display_name: string }) =>
+  request<AuthUser>("/api/auth/me", { method: "PATCH", body: JSON.stringify(payload) });
+export const changeMyPassword = (payload: { current_password: string; new_password: string }) =>
+  request<{ message: string }>("/api/auth/change-password", { method: "POST", body: JSON.stringify(payload) });
+export const listManagedUsers = () => request<{ users: AuthUser[] }>("/api/auth/users");
+export const createManagedUser = (payload: {
+  username: string; email: string; display_name: string; role: AccountRole; temporary_password: string;
+}) => request<AuthUser>("/api/auth/users", { method: "POST", body: JSON.stringify(payload) });
+export const updateManagedUser = (userId: number, payload: { role?: AccountRole; is_active?: boolean }) =>
+  request<AuthUser>(`/api/auth/users/${userId}`, { method: "PATCH", body: JSON.stringify(payload) });
+export const requestPasswordReset = (email: string) =>
+  request<{ message: string; email_delivery_configured: boolean }>("/api/auth/password-reset/request", { method: "POST", body: JSON.stringify({ email }) });
+export const confirmPasswordReset = (token: string, new_password: string) =>
+  request<{ message: string }>("/api/auth/password-reset/confirm", { method: "POST", body: JSON.stringify({ token, new_password }) });
 
 // -----------------------------------------------------------------------------
 // Products
@@ -1114,6 +1142,8 @@ export const exportStockoutCsv = async (
     "Category",
     "Store",
     "Current inventory",
+    "Predicted daily demand",
+    "Estimated days of stock",
     "Forecast demand",
     "Safety stock",
     "Required",
@@ -1138,6 +1168,10 @@ export const exportStockoutCsv = async (
         r.current_inventory.toFixed(
           0
         ),
+        r.forecast_daily_demand.toFixed(
+          1
+        ),
+        r.estimated_days_of_stock?.toFixed(1) ?? "n/a",
         r.forecast_lead_time_demand.toFixed(
           1
         ),

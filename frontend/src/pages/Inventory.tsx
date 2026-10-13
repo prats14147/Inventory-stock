@@ -8,6 +8,7 @@ import {
   adjustInventory,
   createProduct,
   getCurrentInventory,
+  getLowStock,
   getProductCosts,
   getProducts,
   getStockMovements,
@@ -119,7 +120,7 @@ export default function Inventory() {
    * }
    *
    * This is frontend-only state. The actual watchlist
-   * remains product-level in the backend.
+   * uses the same forecast-based product/store risk rows as the dashboard.
    */
   const [selectedFavoriteRows, setSelectedFavoriteRows] =
     useState<Record<string, string>>(() => {
@@ -281,6 +282,16 @@ const [form, setForm] = useState({
           category || undefined,
       }),
     [category, refreshKey]
+  );
+
+  const { data: lowStockData } = useApi(
+    () => getLowStock(),
+    [refreshKey]
+  );
+
+  const lowStockKeys = useMemo(
+    () => new Set((lowStockData?.items ?? []).map((row) => `${row.product_id}-${row.store_id}`)),
+    [lowStockData]
   );
 
   // -------------------------------------------------------------------------
@@ -789,14 +800,14 @@ const [form, setForm] = useState({
       statusFilter === "low"
     ) {
       filtered = filtered.filter(
-        (row) =>
-          row.inventory_level < 50
+        (row) => lowStockKeys.has(`${row.product_id}-${row.store_id}`)
       );
     }
 
     return filtered;
   }, [
     data,
+    lowStockKeys,
     productFilter,
     storeFilter,
     statusFilter,
@@ -1951,7 +1962,7 @@ const [form, setForm] = useState({
                         </td>
 
                         <td className="whitespace-nowrap px-4 py-2">
-                          {row.inventory_level < 50 ? (
+                          {lowStockKeys.has(`${row.product_id}-${row.store_id}`) ? (
                             <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-inset ring-amber-600/20">
                               <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
                               Low

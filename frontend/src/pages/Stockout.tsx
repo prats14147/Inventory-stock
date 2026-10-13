@@ -3,15 +3,13 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useApi } from "../hooks/useApi";
-import { exportStockoutCsv, getProducts, getStockoutRiskList } from "../services/api";
+import { exportStockoutCsv, getCurrentInventory, getProducts, getStockoutRiskList } from "../services/api";
 import { LoadingState, ErrorState } from "../components/LoadingError";
 import RiskBadge from "../components/RiskBadge";
 import PageHeader from "../components/PageHeader";
 import Card from "../components/Card";
 import EmptyState from "../components/EmptyState";
 import PinButton from "../components/PinButton";
-
-const STORES = ["S001", "S002", "S003", "S004", "S005"];
 
 export default function Stockout() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -22,6 +20,8 @@ export default function Stockout() {
   const [storeId, setStoreId] = useState("");
 
   const productsQuery = useApi(() => getProducts(), []);
+  const inventoryQuery = useApi(() => getCurrentInventory(), []);
+  const stores = Array.from(new Set((inventoryQuery.data ?? []).map((row) => row.store_id))).sort();
   const categories = (productsQuery.data?.products ?? []).map((p) => p.category).filter((c, i, arr) => arr.indexOf(c) === i).sort();
 
   // Server-side filtering + pagination: the API slices, so this page stays
@@ -55,14 +55,14 @@ export default function Stockout() {
         title="Stockout Risk"
         subtitle={
           data
-            ? `${highCount} high risk · ${mediumCount} medium risk across ${data.length} products${storeId ? ` · store scope ${storeId}` : ""}.`
-            : "Forecast demand vs on-hand inventory over the lead time, with safety stock."
+            ? `${highCount} high risk · ${mediumCount} medium risk across ${data.length} product/store rows${storeId ? ` · store ${storeId}` : ""}.`
+            : "Each product/store row uses that store's own forecast, stock coverage, lead time, and safety stock."
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-600 shadow-sm">
               <input type="checkbox" checked={onlyAtRisk} onChange={(e) => setOnlyAtRisk(e.target.checked)} className="accent-brand-600" />
-              Only show at-risk products
+              Only show at-risk product/store rows
             </label>
             <button
               type="button"
@@ -101,10 +101,10 @@ export default function Stockout() {
           onChange={(e) => setStoreId(e.target.value)}
           className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm shadow-sm focus:border-brand-500 focus:outline-none"
           aria-label="Store-level risk scope"
-          title="Store-level risk apportions product demand evenly across stores"
+          title="Uses the model forecast and sales history for each product/store pair"
         >
-          <option value="">All stores (product total)</option>
-          {STORES.map((s) => (
+          <option value="">All stores (per-store forecasts)</option>
+          {stores.map((s) => (
             <option key={s} value={s}>{s} only</option>
           ))}
         </select>
@@ -168,6 +168,18 @@ export default function Stockout() {
                     <dd className="tabular-nums font-medium text-gray-900">{item.current_inventory.toFixed(0)}</dd>
                   </div>
                   <div className="flex justify-between">
+                    <dt>Forecast daily demand</dt>
+                    <dd className="tabular-nums">{item.forecast_daily_demand.toFixed(1)}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt>Estimated stock coverage</dt>
+                    <dd className="tabular-nums">
+                      {item.estimated_days_of_stock === null
+                        ? "No positive demand forecast"
+                        : `${item.estimated_days_of_stock.toFixed(1)} days`}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
                     <dt>Forecast demand ({item.lead_time_days}d lead time)</dt>
                     <dd className="tabular-nums">{item.forecast_lead_time_demand.toFixed(1)}</dd>
                   </div>
@@ -198,8 +210,8 @@ export default function Stockout() {
                 urlProduct
                   ? `No risk record for ${urlProduct}.`
                   : onlyAtRisk
-                    ? "No at-risk products right now."
-                    : "No products match this filter."
+                  ? "No at-risk product/store rows right now."
+                  : "No product/store rows match this filter."
               }
               hint={
                 urlProduct

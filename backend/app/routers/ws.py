@@ -70,8 +70,12 @@ async def chat_ws(
     user_id: Optional[str] = Query(default=None),
 ) -> None:
     """Bidirectional chat with per-turn progress and token streaming."""
-    if require_websocket_identity(websocket) is None:
+    identity = require_websocket_identity(websocket)
+    if identity is None:
         await websocket.close(code=1008, reason="Sign-in required")
+        return
+    if identity["role"] == "viewer":
+        await websocket.close(code=1008, reason="Chat actions are available to Manager and Admin accounts")
         return
     await websocket.accept(subprotocol="inventoryai")
 

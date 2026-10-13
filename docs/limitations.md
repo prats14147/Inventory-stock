@@ -54,56 +54,80 @@ their respective phases.
 - The existing `Demand Forecast` column from the source data is never
   used as a feature (guarded by an automated test).
 
-**Results (test set, chronologically held out -- Oct 2023 onward):**
+**Results (chronological holdout, target dates Oct 2023 through the end of the data; 9,300 store-product rows per horizon):**
 
-| Horizon | Baseline (7-day MA) MAE | XGBoost MAE | Improvement |
-|---|---|---|---|
-| 7 days  | 93.4 | 88.5 | ~5.2% |
-| 14 days | 92.8 | 88.5 | ~4.7% |
+| Horizon | Method | MAE (units) | RMSE (units) | sMAPE |
+|---|---|---:|---:|---:|
+| 7 days | XGBoost | 88.54 | 108.14 | 71.56% |
+| 7 days | 14-day moving average | 90.87 | 111.80 | 72.70% |
+| 7 days | 7-day moving average | 93.44 | 115.74 | 74.02% |
+| 7 days | same-weekday seasonal naive | 119.58 | 153.63 | 92.41% |
+| 14 days | XGBoost | 88.54 | 108.16 | 71.56% |
+| 14 days | 14-day moving average | 90.78 | 111.81 | 72.59% |
+| 14 days | 7-day moving average | 92.84 | 115.19 | 73.76% |
+| 14 days | same-weekday seasonal naive | 120.14 | 153.91 | 92.80% |
 
-The improvement over the naive baseline is real but modest, and sMAPE is
-high (~72-74%) at both horizons. Feature importances are nearly uniform
-across all ~30 features (0.035-0.044 each, XGBoost's default gain
-metric) -- no feature dominates. This is consistent with the EDA finding
-that `Units Sold` in this dataset correlates near-zero with price,
-discount, and promotion: **the underlying data has limited genuinely
-learnable signal**, so a much stronger result would be a red flag for
-leakage rather than a sign of a better model. This should be stated
-plainly to any reader of the forecasting results, not glossed over.
+XGBoost beats the moving-average baselines by only about 2–5% on MAE and
+about 3% on RMSE. This is a small improvement, not evidence of a reliable
+high-accuracy forecast. An MAE of 88.5 means the typical absolute error is
+about 89 units for a single product/store/day prediction. RMSE is higher
+because it penalizes the large misses more strongly. sMAPE around 72% is
+also poor; it is especially harsh for small or zero actual sales (the
+zero-sales slice reaches the 200% ceiling).
+
+The holdout errors are comparatively consistent month-to-month, but the
+model misses both low-volume and high-volume observations badly. Daily
+sales have a coefficient of variation near 0.8, the sales process appears
+largely random, and price/discount/promotion have almost no measured
+relationship with sales. Feature importances are nearly uniform. These
+are data limitations: a different algorithm cannot reliably predict
+random variation that is not explained by the available inputs. Better
+accuracy needs real, sufficiently complete store-product sales history,
+recorded stockouts, and known future promotions/price changes, followed
+by rolling-origin evaluation. Do not switch models based only on training
+scores.
+
+### Forecast meaning
+
+The 7-day and 14-day models each predict **one target date** (the latest
+observed date plus 7 or 14 days), separately for each store. The product
+result is the sum of those store predictions for that one date. It is not
+the cumulative number of units expected across all days in the 7/14-day
+window. The chatbot and forecast page must preserve this distinction.
 
 ## Stockout risk / reorder engine assumptions (Phase 6)
 
-- **Product-level, not per-store.** Inventory, forecast demand, and
-  safety stock are all aggregated across the 5 stores for a given
-  product. This matches how the master spec's own chatbot examples talk
-  about a product ("P0001 currently has 50 units... reorder ~95 units")
-  -- they don't reference a specific store. Per-store inventory detail
-  remains available separately via `InventoryService` (Phase 4) if
-  finer-grained decisions are ever needed.
+- **Risk and low-stock lists are per product/store row.** Each row uses
+  that store's own future-date point prediction and historical daily-sales
+  variability. A product-only risk request is explicitly aggregated across
+  stores. Product-only risk and a store-specific risk answer different
+  questions and can differ when stock is unevenly distributed.
 - **No real supplier lead time exists in this dataset.** `lead_time_days`
   always comes from the configurable `DEFAULT_LEAD_TIME_DAYS` setting
   (default 7) unless explicitly overridden, and every stockout-risk /
   reorder response echoes this assumption back explicitly rather than
   applying it silently.
-- **Lead-time demand approximation.** The trained forecasting models
-  (Phase 5) predict a single day's demand at a specific horizon (7 or 14
-  days ahead), not a cumulative sum over an arbitrary window. The model's
-  product-wide prediction for the target date is already a daily rate, so
-  total lead-time demand is approximated as
-  `forecast_total_units * lead_time_days`. This assumes a near-constant
-  daily demand rate across the window -- a simplification, not a per-day
-  recursive forecast.
+- **Lead-time demand approximation.** The model predicts one day's sales
+  on a date 7 or 14 days ahead. Estimated cumulative demand over an
+  arbitrary supplier lead time is approximated as
+  `predicted_units_on_target_date * lead_time_days`. This assumes the
+  target-date demand is a constant daily rate throughout the lead-time
+  window. The model does not predict each day in that window or sum a
+  genuine daily forecast path.
 - **Safety stock formula**: `demand_std * SAFETY_STOCK_SERVICE_FACTOR`,
-  where `demand_std` is the standard deviation of the product's total
-  historical daily sales (summed across stores) over the full 2-year
-  history, and the service factor (default 1.65) is a configurable
-  knob, not a globally optimal value -- this is an analytical
-  recommendation, not a claim of optimal inventory policy.
-- **Risk tiers** (HIGH / MEDIUM / LOW) come directly from comparing
-  current inventory against `forecast_lead_time_demand` and
-  `forecast_lead_time_demand + safety_stock` -- verified across all 20
-  real products to actually produce all three tiers (not a formula that
-  always returns the same answer).
+  where `demand_std` is the standard deviation of that product/store's
+  historical daily sales (or product-wide daily totals for an explicitly
+  aggregated product request) over the available history. The factor
+  (default 1.65) is a configurable knob, not a globally optimal value.
+- **Shared risk rule.** Low-stock and stockout-risk use the same
+  product/store forecast, on-hand stock, lead-time demand, and safety
+  stock calculation. `HIGH` means on-hand stock is below estimated
+  lead-time demand; `MEDIUM` means it covers that demand but not the
+  safety-stock target; `LOW` means it covers both. Estimated days of
+  cover is `on_hand / predicted_daily_demand`. For rows without enough
+  history to forecast, low-stock uses the configured unit floor only as a
+  fallback and marks them `UNSCORED`; the stockout-risk list omits them rather than inventing
+  a forecast.
 - **"As of" date** is the latest date in the data (2024-01-01), same
   convention as Phase 4's "current inventory" -- see the EDA section
   above.

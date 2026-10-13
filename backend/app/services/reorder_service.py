@@ -36,24 +36,25 @@ def calculate_reorder(
             raise _NotFound(f"No inventory record for product '{product_id}' at store '{store_id}'.")
         current_inventory = float(sum(s.inventory_level for s in store_rows))
         as_of_date = current.as_of_date
-        store_count = max(1, len(current.stores))
     else:
         current_inventory = current.total_inventory
         as_of_date = current.as_of_date
-        store_count = None
 
     product = product_repository.get_product(db, product_id)
     name = product.name if product else product_id
     sku = product.sku if product else product_id
     category = product.category if product else "Unknown"
 
-    demand_info = forecast_service.forecast_daily_rate_and_history_std(db, product_id, effective_lead_time)
-    if store_id and store_count:
-        forecast_lead_time_demand = demand_info["forecast_lead_time_demand"] / store_count
-        demand_std = demand_info["historical_daily_demand_std"] / store_count
+    if store_id:
+        demand_info = forecast_service.forecast_daily_rate_and_history_std(
+            db, product_id, effective_lead_time, store_id=store_id
+        )
     else:
-        forecast_lead_time_demand = demand_info["forecast_lead_time_demand"]
-        demand_std = demand_info["historical_daily_demand_std"]
+        demand_info = forecast_service.forecast_daily_rate_and_history_std(
+            db, product_id, effective_lead_time
+        )
+    forecast_lead_time_demand = demand_info["forecast_lead_time_demand"]
+    demand_std = demand_info["historical_daily_demand_std"]
 
     safety_stock = demand_std * safety_factor
     recommended_quantity = max(0.0, forecast_lead_time_demand + safety_stock - current_inventory)
@@ -69,9 +70,7 @@ def calculate_reorder(
     }
     if store_id:
         assumptions["store_scope"] = store_id
-        assumptions["store_demand_apportionment"] = (
-            f"product demand apportioned evenly across {store_count} stores"
-        )
+        assumptions["store_demand_source"] = "the store's own future-date prediction and historical sales"
 
     return ReorderResponse(
         product_id=product_id,

@@ -12,6 +12,8 @@ export interface StockoutRiskResponse {
   current_inventory: number;
   lead_time_days: number;
   forecast_model_horizon_used: number;
+  forecast_daily_demand: number;
+  estimated_days_of_stock: number | null;
   forecast_lead_time_demand: number;
   safety_stock: number;
   required_inventory: number;

@@ -18,6 +18,7 @@ export interface NeedsAttentionItem {
   name: string;
   sku: string;
   category: string;
+  store_id: string;
   risk: RiskLevel;
   current_inventory: number;
   required_inventory: number;
@@ -33,6 +34,10 @@ export interface LowStockItem {
   store_id: string;
   inventory_level: number;
   threshold: number;
+  risk_level: "HIGH" | "MEDIUM" | "UNSCORED";
+  forecast_daily_demand: number | null;
+  estimated_days_of_stock: number | null;
+  reason: string;
 }
 
 export interface SalesSparklinePoint {

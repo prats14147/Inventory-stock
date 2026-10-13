@@ -1,0 +1,16 @@
+.git
+.venv
+**/.venv
+.env
+.env.*
+node_modules
+**/node_modules
+frontend
+data
+ml/training
+ml/eda
+.runtime
+__pycache__
+**/__pycache__
+*.py[cod]
+*.log

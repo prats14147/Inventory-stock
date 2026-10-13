@@ -162,10 +162,7 @@ export default function Dashboard() {
             summary?.low_stock_count ??
             0
           }
-          hint={`Under ${
-            summary?.low_stock_threshold ??
-            50
-          } units`}
+          hint={`Coverage-based; ${summary?.low_stock_threshold ?? 50} units is only the no-history fallback`}
           accent={
             summary &&
             summary.low_stock_count > 0
@@ -183,18 +180,18 @@ export default function Dashboard() {
             highRiskCount > 0
               ? mediumRiskCount > 0
                 ? `${highRiskCount} high · ${mediumRiskCount} medium`
-                : `${highRiskCount} high-risk product${
+                : `${highRiskCount} high-risk row${
                     highRiskCount === 1
                       ? ""
                       : "s"
                   }`
               : mediumRiskCount > 0
-                ? `${mediumRiskCount} medium-risk product${
+                ? `${mediumRiskCount} medium-risk row${
                     mediumRiskCount === 1
                       ? ""
                       : "s"
                   }`
-                : "No products currently at high risk"
+                : "No product/store rows currently at high risk"
           }
           accent={
             highRiskCount > 0
@@ -213,7 +210,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card
           title="Risk Tier Distribution"
-          subtitle="Products by stockout risk level"
+          subtitle="Product/store inventory rows by stockout risk level"
         >
           <ResponsiveContainer
             width="100%"
@@ -268,7 +265,7 @@ export default function Dashboard() {
                 ) => [
                   `${Number(
                     value
-                  ).toLocaleString()} products`,
+                  ).toLocaleString()} product/store rows`,
                   String(name),
                 ]}
               />
@@ -374,21 +371,17 @@ export default function Dashboard() {
 
           <div className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2">
             <p className="text-xs leading-5 text-gray-500">
-              Stockout risk looks at expected future
-              demand and inventory coverage. A product
-              can be high risk even when its current stock
-              is above the low-stock threshold.
+              Stockout risk and low-stock use the same
+              per-store forecast and stock-coverage rule.
+              The unit threshold is only a fallback for
+              items without enough sales history to forecast.
             </p>
           </div>
         </Card>
 
         <Card
           title="Low Stock Preview"
-          subtitle={`Top ${
-            summary?.low_stock_preview
-              ?.length ??
-            0
-          } items below threshold`}
+          subtitle="Product/store rows below the lead-time demand and safety-stock target"
         >
           {summary?.low_stock_preview &&
           summary.low_stock_preview
@@ -428,9 +421,15 @@ export default function Dashboard() {
                           }
                         </span>
 
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 ring-1 ring-inset ring-amber-600/20">
-                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                          Low
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${
+                          item.risk_level === "HIGH"
+                            ? "bg-red-100 text-red-800 ring-red-600/20"
+                            : item.risk_level === "MEDIUM"
+                              ? "bg-amber-100 text-amber-800 ring-amber-600/20"
+                              : "bg-gray-100 text-gray-700 ring-gray-500/20"
+                        }`}>
+                          <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                          {item.risk_level === "UNSCORED" ? "Unscored" : item.risk_level}
                         </span>
                       </div>
 
@@ -444,11 +443,10 @@ export default function Dashboard() {
                           item.inventory_level
                         }{" "}
                         units on hand
-                        {" "}
-                        (threshold:{" "}
-                        {
-                          item.threshold
-                        })
+                        {item.estimated_days_of_stock !== null && (
+                          <> · {item.estimated_days_of_stock.toFixed(1)} days of cover</>
+                        )}
+                        {item.risk_level === "UNSCORED" && <> · fallback: under {item.threshold} units</>}
                       </p>
                     </div>
 
@@ -467,17 +465,13 @@ export default function Dashboard() {
           ) : (
             <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-5 text-center">
               <p className="text-sm font-medium text-gray-700">
-                No low-stock items.
+                No at-risk rows.
               </p>
 
               <p className="mt-1 text-xs leading-5 text-gray-500">
-                No inventory rows are currently below
-                the configured low-stock threshold of{" "}
-                {summary?.low_stock_threshold ??
-                  50}{" "}
-                units. Products can still appear in
-                stockout risk because risk also considers
-                forecast demand and inventory coverage.
+                Forecast-scored rows cover expected lead-time demand plus
+                safety stock. The {summary?.low_stock_threshold ?? 50}-unit
+                fallback applies only when a row lacks usable sales history.
               </p>
 
               {totalRiskCount > 0 && (

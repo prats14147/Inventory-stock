@@ -107,7 +107,7 @@ export default function ChatAnswerCard({ response }: { response: ChatResponse })
       );
     }
     case "DEMAND_FORECAST": {
-      const total = num(data.forecast_total_units);
+      const total = num(data.predicted_units_on_target_date ?? data.forecast_total_units);
       if (total === null) return null;
       return (
         <div className="mt-2 rounded bg-white/70 p-2 text-xs">
@@ -116,8 +116,11 @@ export default function ChatAnswerCard({ response }: { response: ChatResponse })
             <PinControl productId={productId} />
           </div>
           <dl className="space-y-0.5">
-            <Row label="Forecast demand" value={`${total.toFixed(0)} units`} />
-            {typeof data.target_date === "string" && <Row label="By" value={data.target_date} />}
+            <Row label="Predicted on target date" value={`${total.toFixed(0)} units`} />
+            {typeof data.target_date === "string" && <Row label="Target date" value={data.target_date} />}
+            {num(data.model_horizon_days) !== null && (
+              <Row label="Days ahead" value={`${data.model_horizon_days} (point prediction)`} />
+            )}
           </dl>
         </div>
       );

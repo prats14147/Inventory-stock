@@ -41,7 +41,8 @@ class Settings(BaseSettings):
     default_lead_time_days: int = 7
     safety_stock_service_factor: float = 1.65
 
-    # Inventory thresholds
+    # Minimum-stock fallback used only when a product/store has too little
+    # sales history to calculate forecast-based stock coverage.
     low_stock_threshold: int = 50
 
     # Stockout / reorder result cache (Tier A). The inputs are historical and
@@ -61,6 +62,14 @@ class Settings(BaseSettings):
     auth_admin_password: str = ""
     auth_token_secret: str = ""
     auth_token_ttl_minutes: int = 60
+    auth_admin_email: str = ""
+    frontend_base_url: str = "http://127.0.0.1:5173"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_use_ssl: bool = False
     cors_allowed_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
 
     # Real-time layer (Tier 1 demo). The simulator is OFF by default: it is a

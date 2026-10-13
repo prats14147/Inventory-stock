@@ -129,6 +129,8 @@ async def protect_api(
     Public endpoints:
       /api/health
       /api/auth/login
+      /api/auth/password-reset/request
+      /api/auth/password-reset/confirm
 
     OPTIONS requests are allowed so that CORS preflight requests work.
     """
@@ -136,6 +138,8 @@ async def protect_api(
     public_paths = {
         "/api/health",
         "/api/auth/login",
+        "/api/auth/password-reset/request",
+        "/api/auth/password-reset/confirm",
     }
 
     is_api_request = request.url.path.startswith("/api/")
@@ -147,7 +151,8 @@ async def protect_api(
         and not is_public
         and not is_preflight
     ):
-        if require_request_identity(request) is None:
+        identity = require_request_identity(request)
+        if identity is None:
             exc = unauthorized()
 
             return JSONResponse(
@@ -157,6 +162,25 @@ async def protect_api(
                 },
                 headers=exc.headers,
             )
+
+        # Tests and legacy middleware overrides may provide an identity without
+        # attaching user data. Production authentication always attaches this
+        # DB-backed record in require_request_identity.
+        user = getattr(request.state, "authenticated_user", None)
+        role = user["role"] if user else "admin"
+        must_change_password = user["must_change_password"] if user else False
+        path = request.url.path
+        safe_method = request.method in {"GET", "HEAD", "OPTIONS"}
+        self_service = path in {"/api/auth/me", "/api/auth/change-password", "/api/auth/logout"}
+
+        if must_change_password and path not in {"/api/auth/me", "/api/auth/change-password", "/api/auth/logout"}:
+            return JSONResponse(status_code=403, content={"detail": "Change your temporary password before using InventoryAI."})
+
+        if not safe_method and role == "viewer" and not self_service:
+            return JSONResponse(status_code=403, content={"detail": "Viewer accounts have read-only access."})
+
+        if (path.startswith("/api/auth/users") or path.startswith("/api/settings")) and role != "admin":
+            return JSONResponse(status_code=403, content={"detail": "Only admins can manage accounts and system settings."})
 
     return await call_next(request)
 

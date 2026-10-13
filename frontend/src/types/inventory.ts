@@ -33,6 +33,10 @@ export interface LowStockItem {
   region: string;
   inventory_level: number;
   units_ordered: number;
+  risk_level: "HIGH" | "MEDIUM" | "UNSCORED";
+  forecast_daily_demand: number | null;
+  estimated_days_of_stock: number | null;
+  reason: string;
 }
 
 export interface LowStockResponse {

@@ -22,7 +22,7 @@ const EXAMPLE_QUESTIONS = [
   "How much stock do we have for P0001?",
   "Which products are low on stock?",
   "What are our top-selling products?",
-  "Forecast P0001 for the next 14 days.",
+  "Forecast P0001 14 days ahead.",
   "Will P0007 run out of stock?",
   "How much should we reorder for P0007?",
 ];

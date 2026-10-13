@@ -28,12 +28,13 @@ class RiskCounts(BaseModel):
 
 
 class NeedsAttentionItem(BaseModel):
-    """One product that needs a decision today, worst risk first."""
+    """One product/store row that needs a decision today, worst risk first."""
 
     product_id: str
     name: str
     sku: str
     category: str
+    store_id: str
     risk: RiskLevel
     current_inventory: float
     required_inventory: float
@@ -42,7 +43,7 @@ class NeedsAttentionItem(BaseModel):
 
 
 class LowStockItem(BaseModel):
-    """Low stock item for the dashboard preview."""
+    """At-risk product/store row for the dashboard preview."""
 
     product_id: str
     name: str
@@ -51,6 +52,10 @@ class LowStockItem(BaseModel):
     store_id: str
     inventory_level: int
     threshold: int
+    risk_level: str
+    forecast_daily_demand: float | None = None
+    estimated_days_of_stock: float | None = None
+    reason: str
 
 
 class SalesSparklinePoint(BaseModel):

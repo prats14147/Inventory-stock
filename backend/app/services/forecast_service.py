@@ -2,10 +2,9 @@
 backend/app/services/forecast_service.py
 
 Loads the saved XGBoost models ONCE (module-level cache) and never
-retrains on request, per spec section 24. Forecasts are computed at the
-PRODUCT level (summed across all 5 stores), matching how the master
-spec's own chatbot examples talk about demand ("P0001's forecast demand")
--- see docs/limitations.md for the full reasoning.
+retrains on request, per spec section 24. Forecasts are predicted per store
+for one future target date. Product-level results sum those store-specific
+point predictions. See docs/limitations.md for the full reasoning.
 """
 
 from __future__ import annotations
@@ -59,8 +58,9 @@ def _load_model(horizon: int):
 
 def forecast_product_demand(db: Session, product_id: str, horizon: int = 14) -> dict:
     """
-    Forecasts total demand (units) for `product_id`, summed across all
-    stores, `horizon` days beyond the latest date in the data.
+    Predicts sales for one future target date (`origin + horizon`), for each
+    store, then sums those point predictions across stores. This is NOT a
+    cumulative forecast for every day in the horizon.
 
     If `horizon` isn't exactly 7 or 14, the nearest trained model is used
     and this is reported in the response (never silently substituted).
@@ -86,36 +86,66 @@ def forecast_product_demand(db: Session, product_id: str, horizon: int = 14) -> 
     ]
     target_date = live_rows["target_date"].iloc[0]
 
+    predicted_units_on_target_date = float(preds.sum())
+    xgb_mae = float(metadata["xgboost_metrics"]["mae"])
+    baseline_mae = float(metadata.get("baseline_metrics", {}).get("mae", 0.0))
+    baseline_improvement_pct = (
+        (baseline_mae - xgb_mae) / baseline_mae * 100.0 if baseline_mae > 0 else 0.0
+    )
+
     return {
         "product_id": product_id,
         "requested_horizon_days": horizon,
         "model_horizon_days": actual_horizon,
         "target_date": target_date.date(),
-        "forecast_total_units": float(preds.sum()),
+        # Explicit name distinguishes a point prediction from a multi-day sum.
+        "predicted_units_on_target_date": predicted_units_on_target_date,
+        "forecast_total_units": predicted_units_on_target_date,  # legacy API field
+        "prediction_semantics": "single-day point prediction on target_date; not cumulative across the horizon",
         "per_store": per_store,
-        "model_test_mae": metadata["xgboost_metrics"]["mae"],
+        "model_test_mae": xgb_mae,
+        "baseline_mae": baseline_mae,
+        "baseline_improvement_pct": baseline_improvement_pct,
     }
 
 
-def forecast_daily_rate_and_history_std(db: Session, product_id: str, lead_time_days: int) -> dict:
+def forecast_daily_rate_and_history_std(
+    db: Session,
+    product_id: str,
+    lead_time_days: int,
+    store_id: str | None = None,
+) -> dict:
     """
     Used by the stockout-risk/reorder engine (Phase 6): returns the
-    forecast total demand over the next `lead_time_days` (approximated as
-    forecast_daily_rate * lead_time_days -- see docs/limitations.md,
-    "Lead-time demand approximation"), plus the historical daily-demand
-    standard deviation (summed across stores) used for safety stock.
+    a single-day point prediction at the model target date, plus the
+    historical daily-demand standard deviation. The lead-time total is an
+    explicit constant-rate approximation: point prediction * lead_time_days.
+    When `store_id` is provided, both values are calculated for that store.
     """
     nearest_horizon = _nearest_available_horizon(lead_time_days)
     forecast = forecast_product_demand(db, product_id, horizon=nearest_horizon)
-    # forecast_total_units is the sum of the per-store prediction for the
-    # single target date T+h, so it is already a daily product-wide quantity.
-    # Dividing by the model horizon would mix daily units with period units
-    # and materially understate lead-time demand.
-    forecast_daily_rate = forecast["forecast_total_units"]
+    # The prediction is sales on one target date, so it is a daily demand
+    # proxy. It is not a cumulative total for the 7/14-day horizon.
+    if store_id:
+        store_prediction = next(
+            (row["forecast_units"] for row in forecast["per_store"] if row["store_id"] == store_id),
+            None,
+        )
+        if store_prediction is None:
+            raise NotFoundError(
+                f"Not enough sales history to forecast product '{product_id}' at store '{store_id}'."
+            )
+        forecast_daily_rate = float(store_prediction)
+    else:
+        forecast_daily_rate = forecast.get(
+            "predicted_units_on_target_date", forecast["forecast_total_units"]
+        )
     forecast_lead_time_demand = forecast_daily_rate * lead_time_days
 
     history = get_full_history_dataframe_cached(db)
     product_history = history[history["Product ID"] == product_id]
+    if store_id:
+        product_history = product_history[product_history["Store ID"] == store_id]
     daily_totals = product_history.groupby("Date")["Units Sold"].sum()
     demand_std = float(daily_totals.std())
 
@@ -124,6 +154,8 @@ def forecast_daily_rate_and_history_std(db: Session, product_id: str, lead_time_
         "lead_time_days": lead_time_days,
         "forecast_model_horizon_used": nearest_horizon,
         "forecast_daily_rate": forecast_daily_rate,
+        "target_date_prediction_units": forecast_daily_rate,
+        "store_id": store_id,
         "forecast_lead_time_demand": forecast_lead_time_demand,
         "historical_daily_demand_std": demand_std,
     }
