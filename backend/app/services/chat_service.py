@@ -208,7 +208,9 @@ def _tool_low_stock(db: Session, entities: Entities) -> dict:
         if not product_repository.product_exists(db, entities.product_id):
             raise NotFoundError(f"Product '{entities.product_id}' was not found in the current inventory data.")
         result.items = [item for item in result.items if item.product_id == entities.product_id]
-        result.count = len(result.items)
+    if entities.store_id:
+        result.items = [item for item in result.items if item.store_id == entities.store_id]
+    result.count = len(result.items)
     return result.model_dump(mode="json")
 
 
@@ -219,6 +221,9 @@ def _tool_low_stock_fast_sellers(db: Session, entities: Entities) -> dict:
         if not product_repository.product_exists(db, entities.product_id):
             raise NotFoundError(f"Product '{entities.product_id}' was not found in the current inventory data.")
         low_stock.items = [item for item in low_stock.items if item.product_id == entities.product_id]
+    if entities.store_id:
+        low_stock.items = [item for item in low_stock.items if item.store_id == entities.store_id]
+    low_stock.count = len(low_stock.items)
     latest_sales_date = db.scalar(select(func.max(DailySales.date)))
     if latest_sales_date is None:
         return {"items": [], "as_of_date": low_stock.as_of_date.isoformat() if low_stock.as_of_date else None,
@@ -346,30 +351,30 @@ def _tool_forecast_demand(db: Session, entities: Entities) -> dict:
 
 
 def _tool_stockout_risk(db: Session, entities: Entities) -> dict:
-    if entities.product_id:
-        return stockout_service.calculate_stockout_risk(db, entities.product_id).model_dump(mode="json")
+    """Return store-level stockout risk, matching Inventory and Stockout pages."""
     listing = inventory_service.get_current_inventory_listing(db)
-    pairs = sorted({(row.product_id, row.store_id) for row in listing.items})
-    results = []
-    for product_id, store_id in pairs:
-        try:
-            results.append(
-                stockout_service.calculate_stockout_risk(
-                    db, product_id, store_id=store_id
-                ).model_dump(mode="json")
-            )
-        except NotFoundError:
-            continue
-    at_risk = [item for item in results if item["risk"] != "LOW"]
-    at_risk.sort(
-        key=lambda item: (
-            0 if item["risk"] == "HIGH" else 1,
-            item["estimated_days_of_stock"] if item["estimated_days_of_stock"] is not None else float("inf"),
-            item["product_id"],
-            item["store_id"] or "",
-        )
+    scoped_pairs = {
+        (row.product_id, row.store_id)
+        for row in listing.items
+        if (not entities.product_id or row.product_id == entities.product_id)
+        and (not entities.store_id or row.store_id == entities.store_id)
+    }
+    results = stockout_service.list_stockout_risks(
+        db,
+        store_id=entities.store_id,
+        product_id=entities.product_id,
     )
-    return {"items": at_risk, "products_checked": len(results), "as_of_date": listing.as_of_date.isoformat() if listing.as_of_date else None}
+    at_risk = [item.model_dump(mode="json") for item in results if item.risk.value != "LOW"]
+    unscored_count = max(0, len(scoped_pairs) - len(results))
+    return {
+        "items": at_risk,
+        "products_checked": len(results),
+        "rows_considered": len(scoped_pairs),
+        "unscored_count": unscored_count,
+        "as_of_date": listing.as_of_date.isoformat() if listing.as_of_date else None,
+        "product_id": entities.product_id,
+        "store_id": entities.store_id,
+    }
 
 
 def _tool_reorder_recommendation(db: Session, entities: Entities) -> dict:
@@ -563,13 +568,39 @@ def _template_response(intent: Intent, entities: Entities, data: dict) -> str:
         )
     if intent == Intent.STOCKOUT_RISK:
         if "items" in data:
+            product_id = data.get("product_id")
+            unscored = int(data.get("unscored_count", 0) or 0)
             if not data["items"]:
-                return f"None of the {data['products_checked']} product-store combinations checked are currently at medium or high stockout risk (inventory as of {data['as_of_date']})."
+                scope = f" for product {product_id}" if product_id else ""
+                if data.get("products_checked", 0) == 0 and unscored > 0:
+                    return (
+                        f"I couldn't score stockout risk{scope} because usable sales history was unavailable "
+                        f"for {unscored} product-store combination(s). Check the Low Stock list for the "
+                        "unscored unit-threshold fallback."
+                    )
+                note = (
+                    f" {unscored} additional combination(s) could not be scored because there was "
+                    "insufficient usable sales history."
+                    if unscored else ""
+                )
+                return (
+                    f"None of the {data['products_checked']} scorable product-store combinations{scope} "
+                    f"are currently at medium or high stockout risk (inventory as of {data['as_of_date']})."
+                    f"{note}"
+                )
             summary = "; ".join(
                 f"{_product_label(item['product_id'], item.get('product_name') or item.get('name'))} at {item.get('store_id')}: {item['risk'].lower()} risk"
                 for item in data["items"][:8]
             )
-            return f"Product-store combinations at medium or high stockout risk as of {data['as_of_date']}: {summary}. {data['products_checked']} combinations checked."
+            scope = f" for product {product_id}" if product_id else ""
+            note = (
+                f" {unscored} combination(s) could not be scored because there was insufficient usable sales history."
+                if unscored else ""
+            )
+            return (
+                f"Product-store combinations at medium or high stockout risk{scope} as of {data['as_of_date']}: "
+                f"{summary}. {data['products_checked']} scorable combinations checked.{note}"
+            )
         product = _product_label(data["product_id"], data.get("product_name") or data.get("name"))
         return f"{product} has {data['risk']} stockout risk. {data['reason']}"
     if intent == Intent.REORDER_RECOMMENDATION:
@@ -1919,3 +1950,4 @@ def handle_chat_message(
         parse_method=response.parse_method,
         data=response.data,
     )
+

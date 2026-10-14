@@ -54,12 +54,12 @@ class UserCreateRequest(BaseModel):
     username: str = Field(min_length=3, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")
     email: str = Field(min_length=5, max_length=254)
     display_name: str = Field(min_length=1, max_length=120)
-    role: str = Field(pattern=r"^(admin|manager|viewer)$")
+    role: str = Field(pattern=r"^(admin|viewer)$")
     temporary_password: str = Field(min_length=12, max_length=200)
 
 
 class UserUpdateRequest(BaseModel):
-    role: str | None = Field(default=None, pattern=r"^(admin|manager|viewer)$")
+    role: str | None = Field(default=None, pattern=r"^(admin|viewer)$")
     is_active: bool | None = None
 
 

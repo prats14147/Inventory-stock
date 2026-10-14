@@ -16,6 +16,10 @@ from sqlalchemy.orm import Session
 from app.repositories import product_repository
 from app.services import forecast_service, inventory_service
 from app.services.settings_service import effective_lead_time_days, effective_safety_stock_factor
+from app.services.inventory_risk_policy import (
+    calculate_reorder_quantity,
+    calculate_safety_stock,
+)
 from app.schemas.reorder import ReorderResponse
 
 
@@ -56,17 +60,32 @@ def calculate_reorder(
     forecast_lead_time_demand = demand_info["forecast_lead_time_demand"]
     demand_std = demand_info["historical_daily_demand_std"]
 
-    safety_stock = demand_std * safety_factor
-    recommended_quantity = max(0.0, forecast_lead_time_demand + safety_stock - current_inventory)
+    safety_stock = calculate_safety_stock(
+    demand_std,
+    safety_factor,
+    effective_lead_time,
+    )
+
+    recommended_quantity = calculate_reorder_quantity(
+        current_inventory=current_inventory,
+        forecast_lead_time_demand=forecast_lead_time_demand,
+        safety_stock=safety_stock,
+    )
+
 
     assumptions = {
         "lead_time_days": effective_lead_time,
         "lead_time_source": "configurable default (DEFAULT_LEAD_TIME_DAYS) -- "
         "no real supplier lead time exists in this dataset, see docs/limitations.md",
             "safety_stock_service_factor": safety_factor,
+        "safety_stock_formula": "service_factor * historical_daily_demand_std * sqrt(lead_time_days)",
         "forecast_model_horizon_used": demand_info["forecast_model_horizon_used"],
         "lead_time_demand_approximation": "forecast_daily_rate * lead_time_days "
         "(near-constant demand rate over the window assumption, see docs/limitations.md)",
+        "safety_stock_assumption": "daily demand variability is approximately independent across lead-time days; calibrate with real forecast errors when available",
+        "reorder_quantity_formula": (
+        "max(0, forecast_lead_time_demand + safety_stock - current_inventory)"
+        ),
     }
     if store_id:
         assumptions["store_scope"] = store_id

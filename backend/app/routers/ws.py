@@ -75,7 +75,7 @@ async def chat_ws(
         await websocket.close(code=1008, reason="Sign-in required")
         return
     if identity["role"] == "viewer":
-        await websocket.close(code=1008, reason="Chat actions are available to Manager and Admin accounts")
+        await websocket.close(code=1008, reason="Chat actions are available to Admin accounts")
         return
     await websocket.accept(subprotocol="inventoryai")
 

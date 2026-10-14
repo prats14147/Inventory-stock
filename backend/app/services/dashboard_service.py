@@ -32,7 +32,6 @@ from app.schemas.dashboard import (
     StockMovementFeedItem,
 )
 from app.services import inventory_service, reorder_service, sales_service, stockout_service
-from app.services.errors import NotFoundError
 from app.models import DailyInventory, DailySales
 from app.models.stock_movement import StockMovement
 
@@ -56,7 +55,7 @@ def get_dashboard_summary(db: Session) -> DashboardSummaryResponse:
         {(row.product_id, row.store_id) for row in inventory_listing.items}
     )
     cached_before_compute = {
-        (pid, sid): stockout_service.was_cached(pid, store_id=sid)
+        (pid, sid): stockout_service.was_cached(pid, store_id=sid, db=db)
         for pid, sid in product_store_pairs
     }
     low_stock = inventory_service.get_low_stock(db)
@@ -64,13 +63,7 @@ def get_dashboard_summary(db: Session) -> DashboardSummaryResponse:
     category_sales = sales_service.get_category_analysis(db)
     top_products = sales_service.get_top_products(db, limit=5).products
 
-    risks = []
-    for pid, sid in product_store_pairs:
-        try:
-            risks.append(stockout_service.calculate_stockout_risk(db, pid, store_id=sid))
-        except NotFoundError:
-            # New products have inventory but no sales history to forecast yet.
-            continue
+    risks = stockout_service.list_stockout_risks(db)
     served_from_cache = all(
         cached_before_compute.get((r.product_id, r.store_id or ""), False)
         for r in risks

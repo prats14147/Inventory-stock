@@ -1,3 +1,183 @@
+# """backend/app/services/inventory_service.py"""
+
+# from datetime import date, datetime
+
+# from sqlalchemy import select
+# from sqlalchemy.orm import Session
+
+# from app.config import get_settings
+# from app.repositories import inventory_repository, product_repository
+# from app.schemas.inventory import (
+#     CurrentInventoryItem,
+#     CurrentInventoryListResponse,
+#     LowStockItem,
+#     LowStockResponse,
+#     ProductInventoryResponse,
+#     StoreInventory,
+#     StockAdjustmentRequest,
+#     StockAdjustmentResponse,
+# )
+# from app.models import DailyInventory
+# from app.models.stock_movement import ADJUSTABLE_TYPES, StockMovement
+# from app.services.errors import InvalidRequestError, NotFoundError
+# from app.repositories import inventory_repository
+
+
+# def get_product_inventory(db: Session, product_id: str, as_of: date | None = None) -> ProductInventoryResponse:
+#     if not product_repository.product_exists(db, product_id):
+#         raise NotFoundError(f"Product '{product_id}' was not found in the current inventory data.")
+
+#     rows = inventory_repository.get_current_inventory_rows(db, product_id, as_of=as_of)
+#     if not rows:
+#         # Product exists but somehow has no inventory rows -- shouldn't
+#         # happen with this dataset, but handle it rather than crash.
+#         raise NotFoundError(f"No inventory records found for product '{product_id}'.")
+
+#     as_of_date = rows[0].date
+#     stores = [StoreInventory(store_id=r.store_id, inventory_level=r.inventory_level, units_ordered=r.units_ordered) for r in rows]
+#     total = sum(r.inventory_level for r in rows)
+
+#     return ProductInventoryResponse(
+#         product_id=product_id,
+#         as_of_date=as_of_date,
+#         total_inventory=total,
+#         stores=stores,
+#     )
+
+
+# def get_low_stock(db: Session, threshold: int | None = None, as_of: date | None = None) -> LowStockResponse:
+#     from app.services.settings_service import effective_low_stock_threshold
+#     from app.services.stockout_service import calculate_stockout_risk
+#     effective_threshold = effective_low_stock_threshold(db, threshold)
+
+#     as_of_date = as_of or inventory_repository.get_latest_date(db)
+#     rows = inventory_repository.get_all_current_inventory(db, as_of=as_of)
+
+#     items: list[LowStockItem] = []
+#     for row in rows:
+#         try:
+#             risk = calculate_stockout_risk(
+#                 db, row["product_id"], store_id=row["store_id"]
+#             )
+#         except NotFoundError:
+#             # A newly added item without forecast history cannot receive a
+#             # model-based coverage score. Keep zero/very-low stock visible
+#             # using the configured unit floor, and label it unscored.
+#             if row["inventory_level"] >= effective_threshold:
+#                 continue
+#             items.append(
+#                 LowStockItem(
+#                     **row,
+#                     risk_level="UNSCORED",
+#                     forecast_daily_demand=None,
+#                     estimated_days_of_stock=None,
+#                     reason=(
+#                         f"No usable sales history is available for a demand forecast. "
+#                         f"Shown because stock is below the {effective_threshold}-unit fallback floor."
+#                     ),
+#                 )
+#             )
+#             continue
+
+#         if risk.risk.value == "LOW":
+#             continue
+#         items.append(
+#             LowStockItem(
+#                 **row,
+#                 risk_level=risk.risk.value,
+#                 forecast_daily_demand=risk.forecast_daily_demand,
+#                 estimated_days_of_stock=risk.estimated_days_of_stock,
+#                 reason=risk.reason,
+#             )
+#         )
+
+#     risk_order = {"HIGH": 0, "MEDIUM": 1, "UNSCORED": 2}
+#     items.sort(
+#         key=lambda item: (
+#             risk_order.get(item.risk_level, 3),
+#             item.estimated_days_of_stock if item.estimated_days_of_stock is not None else float("inf"),
+#             item.inventory_level,
+#         )
+#     )
+#     return LowStockResponse(
+#         as_of_date=as_of_date,
+#         threshold=effective_threshold,
+#         items=items,
+#         count=len(items),
+#     )
+
+
+# def get_current_inventory_listing(
+#     db: Session,
+#     category: str | None = None,
+#     region: str | None = None,
+# ) -> CurrentInventoryListResponse:
+#     as_of_date = inventory_repository.get_latest_date(db)
+#     rows = inventory_repository.get_all_current_inventory(db, category=category, region=region)
+#     items = [CurrentInventoryItem(**row) for row in rows]
+#     return CurrentInventoryListResponse(as_of_date=as_of_date, items=items, count=len(items))
+
+
+# def get_product_info(db: Session, product_id: str):
+#     """Thin aggregation of existing service calls -- current inventory plus
+#     the monthly sales trend -- for the /api/products/{product_id} endpoint."""
+#     from app.schemas.product import ProductInfoResponse
+#     from app.services import sales_service
+
+#     inventory = get_product_inventory(db, product_id)  # raises NotFoundError if unknown
+#     trend = sales_service.get_sales_trend(db, granularity="monthly", product_id=product_id)
+#     return ProductInfoResponse(product_id=product_id, inventory=inventory, monthly_sales_trend=trend)
+
+
+# def adjust_stock(db: Session, payload: StockAdjustmentRequest, source: str = "inventory_adjustment") -> StockAdjustmentResponse:
+#     """Apply a non-sale stock movement and append it to the movement ledger."""
+#     if payload.movement_type not in ADJUSTABLE_TYPES:
+#         raise InvalidRequestError("movement_type must be DELIVERY, RETURN, or MANUAL_CORRECTION.")
+#     if payload.quantity_delta == 0:
+#         raise InvalidRequestError("quantity_delta cannot be zero.")
+
+#     as_of = inventory_repository.get_latest_date(db) or date.today()
+#     row = db.execute(select(DailyInventory).where(
+#         DailyInventory.date == as_of,
+#         DailyInventory.product_id == payload.product_id,
+#         DailyInventory.store_id == payload.store_id,
+#     )).scalar_one_or_none()
+#     if row is None:
+#         raise NotFoundError("Inventory record not found for this product and store.")
+
+#     before = row.inventory_level
+#     after = before + payload.quantity_delta
+#     if after < 0:
+#         raise InvalidRequestError("Stock cannot become negative.")
+#     if payload.movement_type in {"DELIVERY", "RETURN"} and payload.quantity_delta < 0:
+#         raise InvalidRequestError(f"{payload.movement_type} quantity must be positive.")
+#     if payload.movement_type == "DELIVERY":
+#         # A receipt adds physically received units to on-hand stock and reduces
+#         # the outstanding order count by the received amount. If the receipt
+#         # exceeds the outstanding orders, block it: "Only {row.units_ordered}
+#         # units are currently ordered".
+#         if payload.quantity_delta > row.units_ordered:
+#             raise InvalidRequestError(f"Only {row.units_ordered} units are currently ordered")
+#         row.units_ordered -= payload.quantity_delta
+#     row.inventory_level = after
+#     db.add(StockMovement(
+#         occurred_at=datetime.now(), business_date=as_of, store_id=payload.store_id,
+#         product_id=payload.product_id, movement_type=payload.movement_type,
+#         quantity_delta=payload.quantity_delta, quantity_before=before,
+#         quantity_after=after, reason=payload.reason, source=source,
+#     ))
+#     db.commit()
+
+#     from app.services.stockout_service import clear_risk_cache
+#     clear_risk_cache()
+#     return StockAdjustmentResponse(
+#         date=as_of, product_id=payload.product_id, store_id=payload.store_id,
+#         movement_type=payload.movement_type, quantity_delta=payload.quantity_delta,
+#         quantity_before=before, quantity_after=after, reason=payload.reason,
+#     )
+
+
+
 """backend/app/services/inventory_service.py"""
 
 from datetime import date, datetime
@@ -46,6 +226,12 @@ def get_product_inventory(db: Session, product_id: str, as_of: date | None = Non
 
 
 def get_low_stock(db: Session, threshold: int | None = None, as_of: date | None = None) -> LowStockResponse:
+    """List store/product rows needing attention based on stock coverage.
+
+    Rows with usable forecasts are included when stockout risk is MEDIUM or HIGH.
+    The configured unit threshold is only a fallback for rows without enough
+    sales history to produce a reliable risk score; those rows are marked UNSCORED.
+    """
     from app.services.settings_service import effective_low_stock_threshold
     from app.services.stockout_service import calculate_stockout_risk
     effective_threshold = effective_low_stock_threshold(db, threshold)
