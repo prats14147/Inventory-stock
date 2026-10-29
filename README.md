@@ -365,8 +365,6 @@ a role and must change the temporary password at first sign-in.
 Roles are enforced by the API, not only hidden in the UI:
 
 - **Admin**: manage accounts and system settings, plus all operational pages.
-- **Manager**: read and change inventory, products, sales, purchase orders, and
-  use the project chatbot; cannot manage accounts or system settings.
 - **Viewer**: read-only API access; no write requests or chatbot actions.
 
 Password resets use one-time links that expire after 30 minutes. Configure

@@ -4,7 +4,7 @@ import Card from "../components/Card";
 import { ApiError, changeMyPassword, createManagedUser, listManagedUsers, updateManagedUser, updateMyProfile } from "../services/api";
 import type { AccountRole, AuthUser } from "../services/api";
 
-const roles: AccountRole[] = ["admin", "manager", "viewer"];
+const roles: AccountRole[] = ["admin", "viewer"];
 
 export default function Account({ user, onUserChange, onPasswordChanged }: { user: AuthUser; onUserChange: (user: AuthUser) => void; onPasswordChanged: () => void }) {
   const [displayName, setDisplayName] = useState(user.display_name);

@@ -47,7 +47,7 @@ PostgreSQL (backend/app/models/* + Alembic migrations)
   risk-result cache with TTL + `clear_risk_cache()` on any write).
 - **Auth** sits in middleware (`protect_api` in `app/main.py`): protected
   `/api/*` routes resolve a short-lived bearer token to an active database
-  account. The API enforces Admin/Manager/Viewer write permissions; WebSockets
+  account. The API enforces Admin/Viewer write permissions; WebSockets
   validate the same revocable session before `accept()`.
 
 Key invariant: `dashboard_service` computes **nothing new** — it calls the

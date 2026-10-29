@@ -259,7 +259,7 @@ export const signIn = async (
 export const getCurrentUser = () =>
   request<AuthUser>("/api/auth/me");
 
-export type AccountRole = "admin" | "manager" | "viewer";
+export type AccountRole = "admin" | "viewer";
 
 export type AuthUser = {
   id: number;
