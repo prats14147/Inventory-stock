@@ -151,11 +151,11 @@ def adjust_stock(db: Session, payload: StockAdjustmentRequest, source: str = "in
         raise InvalidRequestError("Stock cannot become negative.")
     if payload.movement_type in {"DELIVERY", "RETURN"} and payload.quantity_delta < 0:
         raise InvalidRequestError(f"{payload.movement_type} quantity must be positive.")
-    if payload.movement_type == "DELIVERY":
-        # A receipt adds physically received units to on-hand stock and reduces
-        # the outstanding order count by the received amount. If the receipt
-        # exceeds the outstanding orders, block it: "Only {row.units_ordered}
-        # units are currently ordered".
+    if payload.movement_type == "DELIVERY" and source == "purchase_order":
+        # A purchase-order receipt must fit the outstanding quantity. A
+        # delivery entered directly from Inventory or chat is an unlinked
+        # physical receipt: it increases on-hand stock without requiring an
+        # existing PO or silently closing one.
         if payload.quantity_delta > row.units_ordered:
             raise InvalidRequestError(f"Only {row.units_ordered} units are currently ordered")
         row.units_ordered -= payload.quantity_delta

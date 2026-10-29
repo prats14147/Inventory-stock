@@ -98,10 +98,12 @@ _INTENT_RULES: list[tuple[Intent, list[str]]] = [
     (Intent.STOCKOUT_RISK, ["stockout", "stock out", "run out", "running out", "sell out", "out of stock soon", "risk of running out", "at risk", "run short", "run low", "last long enough", "last until", "enough stock to last"]),
     (Intent.DEMAND_FORECAST, ["forecast", "predict", "prediction", "projected demand", "expected demand", "how much will we sell", "how many will we sell", "future demand", "sales prediction", "demand estimate", "likely to sell", "sales expected", "demand for", "what is the demand", "whats the demand", "what's the demand"]),
     (Intent.LOW_STOCK, ["low stock", "low on stock", "running low", "which products are low", "need restocking", "below the stock threshold", "need replenishment", "need to restock", "needs restocking", "needs to be restocked", "need to be restocked", "to be restocked", "should i restock", "should we restock", "what should i restock", "what to restock", "running out of stock", "items to replenish"]),
+    # Store-specific rankings must win over broad product-sales phrases such
+    # as "sold the most units" below (e.g. "Which store sold the most units?").
+    (Intent.STORE_ANALYSIS, ["by store", "store breakdown", "which store", "store analysis", "compare stores", "stores sell", "store sells", "store sold", "stores sold", "top store", "best store by sales", "most sales by store"]),
     (Intent.TOP_SELLING, ["top selling", "top-selling", "best selling", "best-selling", "top products", "sell the most", "highest selling", "most popular", "fastest selling", "most sales", "highest sales", "best performer", "top performer", "in demand", "most demanded", "high demand", "what is selling", "whats selling", "what's selling", "selling well", "what sells best"]),
     (Intent.BOTTOM_SELLING, ["bottom selling", "worst selling", "least selling", "slowest selling", "sell the least", "lowest selling", "slow movers", "slow moving", "slow-moving", "least popular"]),
     (Intent.CATEGORY_ANALYSIS, ["by category", "category breakdown", "which category", "category analysis", "compare categories", "categories sell", "category sells"]),
-    (Intent.STORE_ANALYSIS, ["by store", "store breakdown", "which store", "store analysis", "compare stores", "stores sell", "store sells"]),
     (Intent.SALES_TREND, ["trend", "over time", "sales history", "sales pattern", "units sold", "how many did we sell", "what did we sell", "which products sold", "products sold", "items sold", "what sold", "sales for", "sales of", "sales from", "sales between", "sales during", "sales last", "sales this", "sold last", "sold this"]),
     (Intent.HELP, ["help", "what can you do", "what can you help"]),
     (Intent.CURRENT_STOCK, [
@@ -512,6 +514,10 @@ def classify_intent(message: str) -> Intent:
         r"\b(profit|profitable|loss|losing|margin|condition|health|performance|performing|doing|money)\b", lower
     ):
         return Intent.STORE_PROFITABILITY
+    if has_store_scope and re.search(
+        r"\b(sell|sold|sales|selling|units?|items?)\b", lower
+    ) and re.search(r"\b(most|least|top|best|highest|lowest|compare|compared|which)\b", lower):
+        return Intent.STORE_ANALYSIS
     if re.search(r"\b(units?|items?)\b", lower) and re.search(r"\b(sell|sold|sales)\b", lower):
         return Intent.SALES_TREND
     if re.search(r"\b(low|running low|almost out)\b", lower) and re.search(r"\b(stock|inventory|shelf|shelves)\b", lower):

@@ -548,6 +548,9 @@ class TestChatSessionManager:
         )
 
         assert response.entities.get("store_id") == "S001"
+        # The user changed only the store reference, so product context should
+        # remain scoped to the product from the previous inventory question.
+        assert response.entities.get("product_id") == "P0001"
 
     def test_session_listing(self, chat_manager, db_session):
         """Can list sessions."""

@@ -49,19 +49,25 @@ from app.nlp import (
 from app.nlp import catalog_resolve
 from app.nlp.entities import Entities
 from app.nlp.intent import PRODUCT_REQUIRED_INTENTS, Intent
-from app.nlp.request_planner import plan_request, prefer_explicit_stock_action
+from app.nlp.request_planner import (
+    MIN_CONFIDENCE_TO_ROUTE,
+    plan_request,
+    prefer_explicit_stock_action,
+    reject_conflicting_read_plan,
+)
 from app.nlp.llm_client import LLMUnavailableError
 from app.nlp.prompts import RESPONSE_GENERATION_SYSTEM_PROMPT
 from app.nlp.rules import (
     _FAREWELL_RE,
     _THANKS_RE,
+    classify_intent,
     extract_entities,
     is_stock_write_request,
     looks_like_follow_up,
 )
 from app.nlp.tool_registry import TOOL_DEFINITIONS, TOOLS_BY_NAME
 from app.repositories import product_repository
-from app.models import DailyInventory, DailySales, Product
+from app.models import DailyInventory, DailySales, Product, Store
 from app.models.purchase_order import PurchaseOrder
 from app.models.stock_movement import StockMovement
 from app.repositories import inventory_repository
@@ -84,7 +90,7 @@ HELP_TEXT = (
 )
 
 _SALE_QUANTITY_RE = re.compile(
-    r"\b(?:sold|sale\s+of|sell|deduct|remove|subtract|reduce)\s+(?:about\s+|around\s+|approximately\s+)?(\d+)\s*(?:units?|items?|stocks?|stoks?)?\b|"
+    r"\b(?:sold|sale\s+of|sell|deduct|remove|subtract|reduce|confirm|record|log)\s+(?:about\s+|around\s+|approximately\s+)?(\d+)\s*(?:units?|items?|stocks?|stoks?|sales?)?\b|"
     r"\b(\d+)\s*(?:units?|items?|products?|stocks?|stoks?)\b", re.I,
 )
 _SALE_PRICE_RE = re.compile(
@@ -95,17 +101,21 @@ _SALE_PRICE_RE = re.compile(
 _SALE_COST_RE = re.compile(r"\bcost(?:\s+price)?\s*(?:is|of|:|=)?\s*\$?\s*(\d+(?:\.\d{1,2})?)\b", re.I)
 _SALE_REQUEST_RE = re.compile(
     r"\b(?:(?:i|we)\s+(?:just\s+)?sold|record\s+(?:a\s+)?sale|log\s+(?:a\s+)?sale)\b|"
+    r"\b(?:confirm|record|log)\s+\d[\d,]*\s+sales?\s+(?:of\s+)?(?:product\s+)?P0*\d+\b|"
+    r"\b\d[\d,]*\s+(?:units?|items?|stocks?|stoks?|products?)\s+(?:has|have|was|were)\s+been\s+sold\b|"
     r"\b(?:i|we)\s+(?:just\s+)?sold\s+(?:about\s+|around\s+)?\d+\s+(?:stocks?|items?|products?)\b|"
     r"\b\d+\s+(?:units?|items?|products?|stocks?|stoks?)\s+(?:of\s+)?(?:product\s+)?P0*\d+\b"
     r".{0,80}\b(?:(?:was|were|has\s+been|have\s+been)\s+)?sold\b|"
     r"\b(?:sold\s+to\s+(?:a\s+)?(?:customer|cutomer)|(?:customer|cutomer)\s+(?:bought|purchased))\b", re.I,
 )
 _INVENTORY_ACTION_RE = re.compile(
-    r"\b(?:receiv(?:e|ed|ing)|reciev(?:e|ed|ing)|restock(?:ed|ing)?|deliver(?:ed|ing)?|damag(?:e|ed)|broken|expired|wast(?:e|ed)|"
+    r"\b(?:receiv(?:e|ed|ing)|reciev(?:e|ed|ing)|restock(?:ed|ing)?|deliver(?:ed|ing)?|deliev\w*|"
+    r"increas(?:e|ed|ing)|bump(?:ed|ing)?|top\s+up|damag(?:e|ed)|broken|expired|wast(?:e|ed)|"
     r"remove|subtract|reduce|decrease|deduct|adjust|add\s+(?:stocks?|inventory))\b", re.I
 )
 _RECEIVE_ACTION_RE = re.compile(
-    r"\b(?:receiv(?:e|ed|ing)|reciev(?:e|ed|ing)|restock(?:ed|ing)?|deliver(?:ed|ing)?|"
+    r"\b(?:receiv(?:e|ed|ing)|reciev(?:e|ed|ing)|restock(?:ed|ing)?|deliver(?:ed|ing)?|deliev\w*|"
+    r"increas(?:e|ed|ing)|bump(?:ed|ing)?|top\s+up|"
     r"add\s+(?:(?:\w+\s+){0,4})?(?:stocks?|inventory|product\s+quantity|quantity)|"
     r"add\s+(?:(?:about|around|approximately)\s+)?\d+\s*(?:units?|items?|stocks?))\b", re.I
 )
@@ -134,11 +144,11 @@ _PROJECT_QUESTION_RE = re.compile(
     r"how is (?:the )?(?:demand )?forecast(?:ing)?(?: model)?|how is (?:the )?(?:stockout risk|reorder)|"
     r"why (?:does|is) (?:the )?(?:chatbot|forecast model)|"
     r"what does (?:units ordered|stockout risk|the chatbot|the forecast page)|"
-    r"what is (?:this|the) (?:project|app|chatbot|model|dataset)|"
+    r"what is (?:this|the )?(?:project|app|chatbot|model|dataset)|"
     r"in (?:this )?(?:project|app|codebase)|under the hood|architecture)\b",
     re.I,
 )
-_YES_RE = re.compile(r"^(?:yes(?: please)?|y|confirm(?: sale)?|record it|do it|go ahead|proceed|confirmed|please confirm)[.! ]*$", re.I)
+_YES_RE = re.compile(r"^(?:yes(?: please)?|y|confirm(?: sale| it(?: as (?:a )?sale)?| this(?: as (?:a )?sale)?)?|record it|do it|go ahead|proceed|confirmed|please confirm)[.! ]*$", re.I)
 _NO_RE = re.compile(r"^(?:no(?: thanks)?|n|cancel(?: sale)?|stop|don't|do not|not now)[.! ]*$", re.I)
 _SALE_CLARIFICATION_RE = re.compile(
     r"\b(?:for\s+)?sales?\b|\b(?:it was|that was)\s+(?:a\s+)?sale\b|"
@@ -172,11 +182,43 @@ def _is_pending_adjustment_reply(message: str, pending: dict) -> bool:
         return True
     if re.fullmatch(r"P\d+|S\d+|\d+", trimmed, re.I):
         return True
+    awaiting_field = pending.get("awaiting_field")
+    if awaiting_field == "product_id" and re.search(r"\bP0*\d{1,4}\b", trimmed, re.I):
+        return True
+    if awaiting_field == "store_id" and re.search(r"\bS\d{1,4}\b", trimmed, re.I):
+        return True
+    # Accept a repeated ID in a natural-language answer too (e.g. “it is
+    # P0002”), even if the bot has already advanced to asking for the store.
+    if (re.search(r"\b[PS]0*\d{1,4}\b", trimmed, re.I)
+            and not re.search(r"\b(?:how|what|show|check|current|much|many)\b", trimmed, re.I)):
+        return True
     if _INVENTORY_ACTION_RE.search(trimmed):
         return True
     if re.search(r"\b(?:product(?:\s+id)?|sku|store(?:\s+id)?|quantity|units?)\b", trimmed, re.I):
         return not re.search(r"\b(?:how|what|show|check|current|much|many|stock level)\b", trimmed, re.I)
     return False
+
+
+def _planner_clarification(plan) -> str:
+    """Ask for the smallest missing detail instead of guessing an action."""
+    arguments = plan.arguments or {}
+    if plan.request_type in {"sale", "receive", "decrease"}:
+        missing = []
+        if not arguments.get("product_id"):
+            missing.append("product ID")
+        if not arguments.get("store_id"):
+            missing.append("store ID")
+        if plan.quantity is None:
+            missing.append("quantity")
+        if missing:
+            return "I may have misunderstood. Please provide the " + ", ".join(missing) + "."
+        if plan.request_type == "decrease" and plan.reason == "unknown":
+            return "Do you mean the units were sold to a customer, or removed for another reason?"
+        return "I couldn't confidently identify the stock action. Was this a sale, a delivery, or another adjustment?"
+    return (
+        "I’m not confident I understood. Are you asking about stock, sales, a forecast, "
+        "or a stock change? Please add the product/store and time period if they matter."
+    )
 
 CONTEXT_COMMANDS = {
     "reset", "clear context", "start over",
@@ -414,14 +456,13 @@ TOOL_EXECUTORS_BY_NAME = {
     "get_slow_selling_products": _tool_bottom_selling,
     "get_category_analysis": _tool_category_analysis,
     "get_store_analysis": _tool_store_analysis,
+    "get_store_profitability": _tool_store_profitability,
     "forecast_demand": _tool_forecast_demand,
     "get_stockout_risk": _tool_stockout_risk,
     "get_reorder_recommendation": _tool_reorder_recommendation,
     "get_product_info": _tool_product_info,
 }
 TOOLS = {definition.intent: TOOL_EXECUTORS_BY_NAME[definition.name] for definition in TOOL_DEFINITIONS}
-# A phrase-matched legacy alias remains for existing sessions and clients.
-TOOLS[Intent.STORE_PROFITABILITY] = _tool_store_profitability
 
 
 # --- Exceptions -------------------------------------------------------------
@@ -826,7 +867,9 @@ class ChatSessionManager:
             return previous if previous in reusable else None
         return None
 
-    def _handle_chat_sale(self, db: Session, session: SessionData, message: str) -> tuple[str, dict, Intent]:
+    def _handle_chat_sale(
+        self, db: Session, session: SessionData, message: str, cm: ContextManager | None = None
+    ) -> tuple[str, dict, Intent]:
         """Prepare or confirm a sale. Stock is never changed during preparation."""
         pending = dict(session.metadata.get("pending_sale") or {})
         if pending and _NO_RE.fullmatch(message.strip()):
@@ -849,7 +892,7 @@ class ChatSessionManager:
             return (f"Sale recorded: {result.units_sold} units of {product} at {result.store_id}. "
                     f"There are now {result.remaining_inventory} units on hand; sales history has been updated."), data, Intent.RECORD_SALE
 
-        entities = extract_entities(message)
+        entities = cm.inject_context(message, extract_entities(message)) if cm else extract_entities(message)
         awaiting_field = pending.get("awaiting_field")
         quantity_match = None if awaiting_field in {"price", "unit_cost"} else _SALE_QUANTITY_RE.search(message)
         bare_quantity = re.fullmatch(r"\s*(\d+)\s*(?:units?|items?)?\s*", message, re.I)
@@ -1117,7 +1160,9 @@ class ChatSessionManager:
             [], "", {"compare_status": "draft_created"},
         )
 
-    def _handle_stock_adjustment(self, db: Session, session: SessionData, message: str) -> tuple[str, dict, Intent]:
+    def _handle_stock_adjustment(
+        self, db: Session, session: SessionData, message: str, cm: ContextManager | None = None
+    ) -> tuple[str, dict, Intent]:
         """Preview and confirm a delivery or non-sale inventory correction."""
         pending = dict(session.metadata.get("pending_stock_adjustment") or {})
         trimmed = message.strip()
@@ -1143,11 +1188,15 @@ class ChatSessionManager:
             data = {"adjustment_status": "recorded", **result.model_dump(mode="json")}
             change = "increased" if result.quantity_delta > 0 else "reduced"
             product = _product_label_for_db(db, result.product_id)
+            receipt_note = (
+                " The delivery was recorded as an unlinked stock receipt; it did not close a purchase order."
+                if result.movement_type == "DELIVERY" else ""
+            )
             return (f"Stock updated: {product} at {result.store_id} was {change} by "
                     f"{abs(result.quantity_delta)} units; {result.quantity_after} remain. This was recorded as "
-                    f"{result.movement_type.lower().replace('_', ' ')}, not as a sale."), data, Intent.ADJUST_STOCK
+                    f"{result.movement_type.lower().replace('_', ' ')}, not as a sale.{receipt_note}"), data, Intent.ADJUST_STOCK
 
-        entities = extract_entities(message)
+        entities = cm.inject_context(message, extract_entities(message)) if cm else extract_entities(message)
         awaiting_field = pending.get("awaiting_field")
         if awaiting_field == "product_id" and not entities.product_id:
             candidate = re.search(r"\b(?:product\s+id|sku)\s*[:#-]?\s*([A-Za-z0-9][\w-]*)", message, re.I)
@@ -1181,14 +1230,14 @@ class ChatSessionManager:
             self.session_store.save_session(session)
             return "Which product ID is this for? I won't change stock until you confirm the preview.", {
                 "adjustment_status": "collecting_details", "pending_adjustment": draft,
-            }, Intent.ADJUST_STOCK
+            }, Intent.RECEIVE_STOCK if receives else Intent.ADJUST_STOCK
         if not store_id:
             draft = {**pending, "quantity": quantity, "product_id": product_id, "movement_type": movement_type, "reason": reason, "awaiting_field": "store_id"}
             session.metadata["pending_stock_adjustment"] = draft
             self.session_store.save_session(session)
             return f"Which store ID should I update for {product_id}? I won't change stock until you confirm the preview.", {
                 "adjustment_status": "collecting_details", "pending_adjustment": draft,
-            }, Intent.ADJUST_STOCK
+            }, Intent.RECEIVE_STOCK if receives else Intent.ADJUST_STOCK
 
         rows = inventory_repository.get_current_inventory_rows(db, product_id)
         stock = next((row for row in rows if row.store_id == store_id), None)
@@ -1213,9 +1262,12 @@ class ChatSessionManager:
         self.session_store.save_session(session)
         verb = "add" if delta > 0 else "reduce"
         product = _product_label_for_db(db, product_id)
+        receipt_note = (
+            " This records received stock only; it does not create a sale or close a purchase order."
+            if receives else " This will change inventory only; it will not create a sale or revenue."
+        )
         return (f"Please confirm: {verb} {abs(delta)} units of {product} at {store_id} ({reason}). "
-                f"Current stock is {stock.inventory_level}; afterward it will be {after}. "
-                "This will change inventory only; it will not create a sale or revenue."), {
+                f"Current stock is {stock.inventory_level}; afterward it will be {after}.{receipt_note}"), {
                     "adjustment_status": "awaiting_confirmation", "pending_adjustment": draft,
                     "quantity_before": stock.inventory_level, "quantity_after": after,
                 }, Intent.RECEIVE_STOCK if receives else Intent.ADJUST_STOCK
@@ -1286,12 +1338,74 @@ class ChatSessionManager:
         pending_clarification = session.metadata.get("pending_action_clarification") or {}
         planned_request = None
 
-        # Let Gemini interpret fresh turns before keyword routing. Follow-up
-        # answers and confirmations stay deterministic so the model cannot
-        # reinterpret "yes", a quantity, or a clarification as a new request.
+        # Use the deterministic path for clear read-only requests. Sending
+        # every ordinary question to Gemini first made stock/sales answers
+        # depend on an external provider and its timeout, even when the local
+        # rules already selected the correct verified database tool. Keep the
+        # planner for ambiguous wording and explicit stock actions.
         if not (pending_sale or pending_adjustment):
-            planned_request = plan_request(message, self.llm_client, cm.get_context_for_llm())
-            planned_request = prefer_explicit_stock_action(message, planned_request)
+            rule_intent = classify_intent(message)
+            requires_planning = (
+                rule_intent == Intent.UNKNOWN
+                or bool(_SALE_REQUEST_RE.search(message))
+                or is_stock_write_request(message)
+                or bool(_INVENTORY_ACTION_RE.search(message))
+            )
+            if requires_planning:
+                planned_request = plan_request(message, self.llm_client, cm.get_context_for_llm())
+                planned_request = prefer_explicit_stock_action(message, planned_request)
+                planned_request = reject_conflicting_read_plan(message, planned_request)
+                # A quantified, imperative receipt is an explicit stock write.
+                # Do not let a model that mistakes it for a stock read send it
+                # down the previous-intent carryover path. The deterministic
+                # adjustment handler below resolves pronouns from conversation
+                # context and still requires confirmation before changing data.
+                without_ids = re.sub(r"\b[PS]\d+\b", " ", message, flags=re.I)
+                explicit_receipt = (
+                    _RECEIVE_ACTION_RE.search(message)
+                    and _ACTION_QUANTITY_RE.search(without_ids)
+                    and not re.search(
+                        r"\b(?:how\s+(?:many|much)|what|which|show|list|when|trend|forecast|history)\b",
+                        message, re.I,
+                    )
+                )
+                if explicit_receipt:
+                    planned_request = None
+            if planned_request and planned_request.request_type in {"sale", "receive", "decrease"}:
+                # Resolve only references actually present in the user's
+                # wording. The model cannot invent IDs; the session tracker
+                # can ground “that product” / “that store” from earlier turns.
+                action_entities = cm.inject_context(message, extract_entities(message))
+                active_entities = cm.entity_tracker.get_active_entities()
+                references_store = bool(re.search(r"\b(?:that|this|the) store\b|\bthere\b", message, re.I))
+                if (references_store and not action_entities.product_id
+                        and active_entities.get("product_id")):
+                    action_entities.product_id = active_entities["product_id"]
+                arguments = dict(planned_request.arguments or {})
+                arguments["product_id"] = arguments.get("product_id") or action_entities.product_id
+                arguments["store_id"] = arguments.get("store_id") or action_entities.store_id
+                planned_request.arguments = arguments
+            if planned_request and planned_request.confidence < MIN_CONFIDENCE_TO_ROUTE:
+                fallback_intent, _, _ = parser.parse(message, llm_client=None, context=cm.get_context_for_llm())
+                if fallback_intent == Intent.UNKNOWN:
+                    response_text = _planner_clarification(planned_request)
+                    self._save_turn(session_id, message, response_text, Intent.UNKNOWN, "clarification", {})
+                    return ConversationChatResponse(
+                        message=response_text, intent=Intent.UNKNOWN, entities={},
+                        parse_method="clarification", data={"confidence": planned_request.confidence},
+                        session_id=session_id, context=cm.get_context_for_llm(),
+                    )
+                # A clear deterministic rule can safely recover when the LLM
+                # is unsure. The same rule result is used below for execution.
+                planned_request = None
+            elif planned_request and planned_request.request_type == "unclear":
+                response_text = _planner_clarification(planned_request)
+                self._save_turn(session_id, message, response_text, Intent.UNKNOWN, "clarification", {})
+                return ConversationChatResponse(
+                    message=response_text, intent=Intent.UNKNOWN, entities={},
+                    parse_method="clarification", data={"confidence": planned_request.confidence},
+                    session_id=session_id, context=cm.get_context_for_llm(),
+                )
 
         # A new command in the opposite direction must not inherit the
         # movement type from an earlier, unconfirmed preview. For example,
@@ -1316,7 +1430,7 @@ class ChatSessionManager:
             sale_request = "I sold" + (f" {quantity} units" if quantity else "")
             sale_request += (f" of {product_id}" if product_id else "") + (f" at {store_id}" if store_id else "")
             sale_request += f". {message}"
-            response_text, data, intent = self._handle_chat_sale(db, session, sale_request)
+            response_text, data, intent = self._handle_chat_sale(db, session, sale_request, cm)
             self._save_turn(session_id, message, response_text, intent, "rules", data, extract_entities(sale_request))
             return ConversationChatResponse(message=response_text, intent=intent,
                 entities=extract_entities(sale_request).model_dump(), parse_method="rules", data=data,
@@ -1324,7 +1438,7 @@ class ChatSessionManager:
         if pending_clarification and _RECEIVE_ACTION_RE.search(message):
             session.metadata.pop("pending_action_clarification", None)
             combined_request = f"{pending_clarification.get('message', '')} {message}"
-            response_text, data, intent = self._handle_stock_adjustment(db, session, combined_request)
+            response_text, data, intent = self._handle_stock_adjustment(db, session, combined_request, cm)
             self._save_turn(session_id, message, response_text, intent, "rules", data, extract_entities(combined_request))
             return ConversationChatResponse(message=response_text, intent=intent,
                 entities=extract_entities(combined_request).model_dump(), parse_method="rules", data=data,
@@ -1332,16 +1446,39 @@ class ChatSessionManager:
         if pending_clarification and _ADJUSTMENT_CLARIFICATION_RE.search(message):
             session.metadata.pop("pending_action_clarification", None)
             combined_request = f"{pending_clarification.get('message', '')} {message}"
-            response_text, data, intent = self._handle_stock_adjustment(db, session, combined_request)
+            response_text, data, intent = self._handle_stock_adjustment(db, session, combined_request, cm)
             self._save_turn(session_id, message, response_text, intent, "rules", data, extract_entities(combined_request))
             return ConversationChatResponse(message=response_text, intent=intent,
                 entities=extract_entities(combined_request).model_dump(), parse_method="rules", data=data,
                 session_id=session_id, context=cm.get_context_for_llm())
-        if pending_adjustment and _SALE_REQUEST_RE.search(message):
-            response_text = "There is a stock adjustment waiting for confirmation. Confirm or cancel it before starting a sale."
-            self._save_turn(session_id, message, response_text, Intent.UNKNOWN, "rules", {})
-            return ConversationChatResponse(message=response_text, intent=Intent.UNKNOWN, entities={},
-                parse_method="rules", data=None, session_id=session_id, context=cm.get_context_for_llm())
+        if (pending_adjustment and _SALE_CLARIFICATION_RE.search(message)
+                and not _ADJUSTMENT_CLARIFICATION_RE.search(message)):
+            # Reclassifying an unconfirmed reduction as a sale must create a
+            # sale preview, never post either kind of change immediately. If
+            # the user supplies a new explicit sale quantity, use that request;
+            # otherwise carry the pending reduction's quantity and targets.
+            if pending_adjustment.get("movement_type") == "DELIVERY":
+                response_text = "That preview is a stock receipt, not a reduction. Cancel it before preparing a customer sale."
+                self._save_turn(session_id, message, response_text, Intent.UNKNOWN, "rules", {})
+                return ConversationChatResponse(message=response_text, intent=Intent.UNKNOWN, entities={},
+                    parse_method="rules", data=None, session_id=session_id, context=cm.get_context_for_llm())
+            session.metadata.pop("pending_stock_adjustment", None)
+            self.session_store.save_session(session)
+            if _SALE_REQUEST_RE.search(message):
+                sale_request = message
+            else:
+                quantity = abs(int(pending_adjustment.get("quantity_delta") or 0))
+                product_id = pending_adjustment.get("product_id")
+                store_id = pending_adjustment.get("store_id")
+                sale_request = (
+                    f"I sold {quantity} units of product {product_id} at store {store_id}. {message}"
+                )
+            response_text, data, sale_intent = self._handle_chat_sale(db, session, sale_request, cm)
+            self._save_turn(session_id, message, response_text, sale_intent, "rules", data,
+                            extract_entities(sale_request))
+            return ConversationChatResponse(message=response_text, intent=sale_intent,
+                entities=extract_entities(sale_request).model_dump(), parse_method="rules", data=data,
+                session_id=session_id, context=cm.get_context_for_llm())
         if (pending_sale and _INVENTORY_ACTION_RE.search(message)
                 and not _STOCK_HISTORY_QUERY_RE.search(message)
                 and not _is_pending_sale_reply(message, pending_sale)):
@@ -1350,7 +1487,7 @@ class ChatSessionManager:
             return ConversationChatResponse(message=response_text, intent=Intent.UNKNOWN, entities={},
                 parse_method="rules", data=None, session_id=session_id, context=cm.get_context_for_llm())
         if pending_adjustment and (_YES_RE.fullmatch(message.strip()) or _NO_RE.fullmatch(message.strip())):
-            response_text, data, action_intent = self._handle_stock_adjustment(db, session, message)
+            response_text, data, action_intent = self._handle_stock_adjustment(db, session, message, cm)
             self._save_turn(session_id, message, response_text, action_intent, "rules", data, extract_entities(message))
             return ConversationChatResponse(message=response_text, intent=action_intent,
                 entities=extract_entities(message).model_dump(), parse_method="rules", data=data,
@@ -1406,15 +1543,15 @@ class ChatSessionManager:
                     canonical += f" at ${planned_request.unit_price:.2f}"
                 if planned_request.unit_cost is not None and not _SALE_COST_RE.search(source):
                     canonical += f" cost ${planned_request.unit_cost:.2f}"
-                response_text, data, action_intent = self._handle_chat_sale(db, session, canonical)
+                response_text, data, action_intent = self._handle_chat_sale(db, session, canonical, cm)
             elif planned_request.request_type == "receive":
                 response_text, data, action_intent = self._handle_stock_adjustment(
-                    db, session, f"received {details}. {source}"
+                    db, session, f"received {details}. {source}", cm
                 )
             elif planned_request.reason in {"damage", "loss", "waste", "correction"}:
                 reason_words = {"damage": "damaged", "loss": "lost", "waste": "wasted", "correction": "manual correction"}
                 response_text, data, action_intent = self._handle_stock_adjustment(
-                    db, session, f"remove {details} {reason_words[planned_request.reason]}. {source}"
+                    db, session, f"remove {details} {reason_words[planned_request.reason]}. {source}", cm
                 )
             else:
                 clarification = {
@@ -1443,7 +1580,7 @@ class ChatSessionManager:
         if _RECEIVE_ACTION_RE.search(message) and not _STOCK_HISTORY_QUERY_RE.search(message) and not re.search(
             r"\b(?:how many|how much|what|which|show|list|when|trend|forecast|history)\b", message, re.I
         ):
-            response_text, data, action_intent = self._handle_stock_adjustment(db, session, message)
+            response_text, data, action_intent = self._handle_stock_adjustment(db, session, message, cm)
             self._save_turn(session_id, message, response_text, action_intent, "rules", data, extract_entities(message))
             return ConversationChatResponse(message=response_text, intent=action_intent,
                 entities=extract_entities(message).model_dump(), parse_method="rules", data=data,
@@ -1465,7 +1602,7 @@ class ChatSessionManager:
             return ConversationChatResponse(message=response_text, intent=Intent.UNKNOWN, entities=extracted.model_dump(),
                 parse_method="rules", data=None, session_id=session_id, context=cm.get_context_for_llm())
         if _SALE_REQUEST_RE.search(message) or (pending_sale and _is_pending_sale_reply(message, pending_sale)):
-            result = self._handle_chat_sale(db, session, message)
+            result = self._handle_chat_sale(db, session, message, cm)
             response_text, data, intent = result
             self._save_turn(session_id, message, response_text, intent, "rules", data, extract_entities(message))
             return ConversationChatResponse(message=response_text, intent=intent,
@@ -1480,7 +1617,7 @@ class ChatSessionManager:
              and not re.search(r"\b(?:how many|how much|what|which|show|list|when|trend|forecast|history)\b", message, re.I))
             or (pending_adjustment and _is_pending_adjustment_reply(message, pending_adjustment))
         ):
-            response_text, data, action_intent = self._handle_stock_adjustment(db, session, message)
+            response_text, data, action_intent = self._handle_stock_adjustment(db, session, message, cm)
             self._save_turn(session_id, message, response_text, action_intent, "rules", data, extract_entities(message))
             return ConversationChatResponse(message=response_text, intent=action_intent,
                 entities=extract_entities(message).model_dump(), parse_method="rules", data=data,
@@ -1501,13 +1638,21 @@ class ChatSessionManager:
             return ConversationChatResponse(message=response_text, intent=Intent.UNKNOWN, entities={},
                 parse_method="rules", data=None, session_id=session_id, context=cm.get_context_for_llm())
 
-        # Prefer checked-in documentation for explicit "how does this project
-        # work?" questions so a generic analytics intent doesn't ask for an SKU.
-        if (not (planned_request and planned_request.request_type == "read")
-                and _PROJECT_QUESTION_RE.search(message)
+        # Use RAG for project/documentation questions, not as a catch-all for
+        # unknown operational wording. TF-IDF can find misleading excerpts
+        # (for example, “delivered products” matching email delivery in the
+        # README), so explicit project intent or the constrained planner's
+        # not_inventory classification must select this route.
+        is_project_question = bool(_PROJECT_QUESTION_RE.search(message)) or bool(
+            planned_request and planned_request.request_type == "not_inventory"
+        )
+        if (is_project_question
+                and not (planned_request and planned_request.request_type == "read")
+                and not (planned_request and planned_request.request_type in {"sale", "receive", "decrease"})
+                and not _INVENTORY_ACTION_RE.search(message)
                 and not re.search(r"\bP0*\d{1,4}\b", message, re.I)):
             knowledge = project_knowledge_service.answer(message, self.llm_client)
-            if knowledge and _PROJECT_QUESTION_RE.search(message):
+            if knowledge:
                 response_text, data = knowledge["message"], knowledge["data"]
                 self._save_turn(session_id, message, response_text, Intent.UNKNOWN, "knowledge", data, extract_entities(message))
                 return ConversationChatResponse(message=response_text, intent=Intent.UNKNOWN,
@@ -1548,6 +1693,12 @@ class ChatSessionManager:
             carried_intent = self._carryover_intent(session, message)
             if carried_intent is not None:
                 intent, method = carried_intent, "context"
+                # A store-only follow-up commonly relies on both entities:
+                # “Stock for P0001 at S001” → “How much at that store?”
+                # Keep the product filter from the active topic as well.
+                active_entities = cm.entity_tracker.get_active_entities()
+                if not entities.product_id and active_entities.get("product_id"):
+                    entities.product_id = active_entities["product_id"]
 
         # 4c. Multi-product compare (Upgrade #3): side-by-side risk/reorder
         # with an optional chained draft PO. Handled as its own branch
@@ -1644,20 +1795,27 @@ class ChatSessionManager:
                 context=cm.get_context_for_llm(),
             )
 
-        # 6. Validate product entity against real database
-        if intent in PRODUCT_REQUIRED_INTENTS and entities.product_id:
-            if not product_repository.product_exists(db, entities.product_id):
-                response_text = f"I couldn't find product '{entities.product_id}' in the current inventory data."
-                self._save_turn(session_id, message, response_text, intent, method, {})
-                return ConversationChatResponse(
-                    message=response_text,
-                    intent=intent,
-                    entities=entities.model_dump(),
-                    parse_method=method,
-                    data=None,
-                    session_id=session_id,
-                    context=cm.get_context_for_llm(),
-                )
+        # 6. Validate grounded or context-carried identifiers against the live
+        # catalogs before any tool query. A syntactically valid but unknown
+        # store must not silently produce an empty result set.
+        if entities.product_id and not product_repository.product_exists(db, entities.product_id):
+            response_text = f"I couldn't find product '{entities.product_id}' in the current inventory data."
+            # Do not retain an invalid catalog ID as the active entity for a
+            # later pronoun follow-up.
+            self._save_turn(session_id, message, response_text, Intent.UNKNOWN, method, {})
+            return ConversationChatResponse(
+                message=response_text, intent=intent, entities=entities.model_dump(),
+                parse_method=method, data=None, session_id=session_id,
+                context=cm.get_context_for_llm(),
+            )
+        if entities.store_id and db.get(Store, entities.store_id) is None:
+            response_text = f"I couldn't find store '{entities.store_id}' in the current store list."
+            self._save_turn(session_id, message, response_text, Intent.UNKNOWN, method, {})
+            return ConversationChatResponse(
+                message=response_text, intent=intent, entities=entities.model_dump(),
+                parse_method=method, data=None, session_id=session_id,
+                context=cm.get_context_for_llm(),
+            )
 
         if entities.product_reference and not entities.product_id and intent in {
             Intent.CURRENT_STOCK, Intent.REVENUE_ANALYSIS, Intent.FINANCIAL_ANALYSIS,
@@ -1747,22 +1905,19 @@ class ChatSessionManager:
 
         # 8. Generate response (LLM phrasing or template)
         _notify(on_stage, STAGE_PHRASING)
-        response_text = _llm_phrase_response(self.llm_client, message, intent, data, on_token=on_token)
+        # Deterministic routes already have verified data and a formatter;
+        # avoid a second provider round-trip merely to rephrase that answer.
+        # Keep model phrasing for requests that actually needed the planner.
+        response_text = (
+            _llm_phrase_response(self.llm_client, message, intent, data, on_token=on_token)
+            if method == "gemini_plan" else None
+        )
         if response_text is None:
             response_text = _template_response(intent, entities, data)
 
-        # 9. Update conversation context
-        cm.process_turn(
-            session_id=session_id,
-            user_message=message,
-            entities=entities,
-            intent=intent,
-            parse_method=method,
-            response=response_text,
-            data=data,
-        )
-
-        # 10. Save turn to session store
+        # 9. Save turn and update conversation context in one shared path.
+        # This also covers action previews and short confirmations, which
+        # return earlier than this normal read-response path.
         self._save_turn(session_id, message, response_text, intent, method, data, entities)
 
         # 11. Return response with context
@@ -1786,14 +1941,29 @@ class ChatSessionManager:
         data: dict,
         entities: Optional[Entities] = None,
     ) -> None:
-        """Save a turn to the session store."""
+        """Save a turn and keep the active entity context in sync."""
         session = self.session_store.get_session(session_id)
+        cm = self._get_or_create_context_manager(session_id)
+        stored_entities = entities or Entities()
+        if intent is not None and intent != Intent.UNKNOWN:
+            cm.process_turn(
+                session_id=session_id,
+                user_message=user_message,
+                entities=stored_entities,
+                intent=intent,
+                parse_method=parse_method,
+                response=assistant_response,
+                data=data,
+            )
+            # Store resolved IDs so context can also be restored after a
+            # server restart or session-manager recreation.
+            stored_entities = cm.entity_tracker.resolve(user_message, stored_entities)
         turn = {
             "turn_index": len(session.turns) if session else 0,
             "user_message": user_message,
             "assistant_response": assistant_response,
             "intent": intent.value if intent else None,
-            "entities": entities.model_dump() if entities else {},
+            "entities": stored_entities.model_dump(),
             "parse_method": parse_method,
             "data": data,
             "timestamp": datetime.now(timezone.utc).isoformat(),
