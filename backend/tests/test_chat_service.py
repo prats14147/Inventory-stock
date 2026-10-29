@@ -18,7 +18,11 @@ from app.nlp.entities import Entities
 from app.nlp.intent import Intent
 from app.nlp.llm_client import LLMUnavailableError
 from app.nlp.rules import classify_intent, extract_entities, is_stock_write_request
-from app.services.chat_service import _is_pending_sale_reply, handle_chat_message
+from app.services.chat_service import (
+    _is_pending_adjustment_reply,
+    _is_pending_sale_reply,
+    handle_chat_message,
+)
 
 
 # --- Rule-based layer (no network, always available) -----------------------
@@ -191,7 +195,10 @@ class FakeLLMClient:
 
 
 def test_llm_fallback_used_only_when_rules_return_unknown():
-    fake = FakeLLMClient(json_response={"intent": "TOP_SELLING", "entities": {}})
+    fake = FakeLLMClient(json_response={
+        "request_type": "read", "tool": "get_top_selling_products",
+        "arguments": {}, "confidence": 0.95,
+    })
     # Rules already classify this confidently -- LLM should NOT be called.
     intent, entities, method = parser.parse("What are our top-selling products?", llm_client=fake)
     assert method == "rules"
@@ -199,7 +206,10 @@ def test_llm_fallback_used_only_when_rules_return_unknown():
 
 
 def test_llm_fallback_invoked_for_ambiguous_message():
-    fake = FakeLLMClient(json_response={"intent": "CURRENT_STOCK", "entities": {"product_id": "P0003"}})
+    fake = FakeLLMClient(json_response={
+        "request_type": "read", "tool": "get_current_stock",
+        "arguments": {"product_id": "P0003"}, "confidence": 0.95,
+    })
     intent, entities, method = parser.parse("what's up with that thing we sell", llm_client=fake)
     assert method == "llm"
     assert intent == Intent.CURRENT_STOCK
@@ -210,8 +220,10 @@ def test_llm_fallback_invoked_for_ambiguous_message():
 
 def test_llm_can_select_only_a_registered_tool():
     fake = FakeLLMClient(json_response={
+        "request_type": "read",
         "tool": "get_current_stock",
         "arguments": {"product_id": "P0003"},
+        "confidence": 0.95,
     })
     intent, entities, method = parser.parse("How stocked are we? P0003", llm_client=fake)
     assert method == "llm"
@@ -220,13 +232,17 @@ def test_llm_can_select_only_a_registered_tool():
 
 
 def test_llm_unregistered_tool_is_rejected():
-    fake = FakeLLMClient(json_response={"tool": "run_sql", "arguments": {}})
+    fake = FakeLLMClient(json_response={
+        "request_type": "read", "tool": "run_sql", "arguments": {}, "confidence": 0.99,
+    })
     intent, _, _ = parser.parse("please inspect inventory", llm_client=fake)
     assert intent == Intent.UNKNOWN
 
 
 def test_llm_invalid_intent_value_discarded_as_unknown():
-    fake = FakeLLMClient(json_response={"intent": "NOT_A_REAL_INTENT", "entities": {}})
+    fake = FakeLLMClient(json_response={
+        "request_type": "not_a_real_request", "arguments": {}, "confidence": 0.99,
+    })
     intent, entities, method = parser.parse("some ambiguous message here", llm_client=fake)
     assert intent == Intent.UNKNOWN
 
@@ -241,8 +257,10 @@ def test_llm_unavailable_falls_back_gracefully():
 def test_llm_arbitrary_extra_keys_are_ignored():
     fake = FakeLLMClient(
         json_response={
-            "intent": "CURRENT_STOCK",
-            "entities": {"product_id": "P0001", "malicious_field": "DROP TABLE products;"},
+            "request_type": "read",
+            "tool": "get_current_stock",
+            "arguments": {"product_id": "P0001", "malicious_field": "DROP TABLE products;"},
+            "confidence": 0.95,
         }
     )
     intent, entities, method = parser.parse("ambiguous phrasing here", llm_client=fake)
@@ -263,7 +281,7 @@ def test_llm_malformed_json_shapes_do_not_break_chat_parser(raw_response):
             return raw_response
 
     intent, _, _ = parser.parse("some ambiguous wording", llm_client=RawLLMClient())
-    assert intent in {Intent.UNKNOWN, Intent.LOW_STOCK}
+    assert intent == Intent.UNKNOWN
 
 
 # --- Full chat pipeline (rule-based / template mode, live DB) --------------
@@ -419,6 +437,65 @@ def test_pending_sale_does_not_capture_unrelated_stock_question():
     draft = {"product_id": "P0001", "store_id": "S001", "units_sold": 2, "price": 10.0}
     assert not _is_pending_sale_reply("How much stock do we have for P0001?", draft)
     assert _is_pending_sale_reply("confirm sale", draft)
+
+
+def test_pending_stock_adjustment_accepts_product_and_store_codes_in_sentences():
+    assert _is_pending_adjustment_reply(
+        "its p0002", {"awaiting_field": "product_id", "movement_type": "DELIVERY"}
+    )
+    assert _is_pending_adjustment_reply(
+        "of S0002", {"awaiting_field": "store_id", "movement_type": "DELIVERY"}
+    )
+
+
+def test_stock_receipt_resolves_product_pronoun_and_collects_store(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.nlp.context_manager import create_context_manager
+    from app.nlp.session_store import SessionData
+    from app.services import chat_service
+    from app.services.chat_service import ChatSessionManager
+
+    class MemorySessionStore:
+        def save_session(self, session):
+            pass
+
+    manager = ChatSessionManager.__new__(ChatSessionManager)
+    manager.session_store = MemorySessionStore()
+    session = SessionData(session_id="receipt-follow-up")
+    cm = create_context_manager()
+    cm.process_turn(
+        session_id=session.session_id,
+        user_message="tell me how much stock in P0002?",
+        entities=Entities(product_id="P0002"),
+        intent=Intent.CURRENT_STOCK,
+        parse_method="rules",
+        response="P0002 stock details",
+    )
+
+    first_reply, first_data, first_intent = manager._handle_stock_adjustment(
+        None, session, "can you add more stocks about 10000 to it", cm
+    )
+    assert first_intent == Intent.RECEIVE_STOCK
+    assert first_data["pending_adjustment"]["product_id"] == "P0002"
+    assert first_data["pending_adjustment"]["quantity"] == 10000
+    assert "Which store ID" in first_reply
+
+    pending = session.metadata["pending_stock_adjustment"]
+    assert _is_pending_adjustment_reply("of S0002", pending)
+    assert _is_pending_adjustment_reply("its p0002", pending)
+    monkeypatch.setattr(
+        chat_service.inventory_repository,
+        "get_current_inventory_rows",
+        lambda _db, _product_id: [SimpleNamespace(store_id="S002", inventory_level=500)],
+    )
+    monkeypatch.setattr(chat_service, "_product_label_for_db", lambda *_: "Cotton T-Shirt (P0002)")
+    preview, data, _ = manager._handle_stock_adjustment(None, session, "of S0002", cm)
+    assert data["adjustment_status"] == "awaiting_confirmation"
+    assert data["pending_adjustment"]["product_id"] == "P0002"
+    assert data["pending_adjustment"]["store_id"] == "S002"
+    assert data["pending_adjustment"]["quantity_delta"] == 10000
+    assert "afterward it will be 10500" in preview
 
 
 def test_chat_answers_project_questions_from_local_docs(db):

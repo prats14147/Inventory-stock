@@ -20,7 +20,7 @@ export default function ResetPassword() {
         setMessage(result.message);
       } else {
         const result = await requestPasswordReset(email);
-        setMessage(result.email_delivery_configured ? result.message : "The request was received, but email delivery is not configured on this server. Contact your administrator to enable SMTP or reset the account.");
+        setMessage(result.email_delivery_configured ? result.message : "The request was received, but this server cannot send reset emails yet. Ask your administrator to configure SMTP, then request a new reset link.");
       }
     } catch (reason) {
       setError(reason instanceof ApiError ? reason.message : "Could not complete the request.");

@@ -15,10 +15,12 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.nlp.entities import Entities
-from app.nlp.rules import extract_entities
-from app.nlp.tool_registry import TOOLS_BY_NAME
+from app.nlp.intent import Intent
+from app.nlp.rules import classify_intent, extract_entities
+from app.nlp.tool_registry import TOOLS_BY_INTENT, TOOLS_BY_NAME
 
 log = logging.getLogger("nlp.request_planner")
+MIN_CONFIDENCE_TO_ROUTE = 0.65
 
 
 class RequestPlan(BaseModel):
@@ -80,6 +82,7 @@ def plan_request(message: str, llm_client, context: dict | None = None) -> Reque
         for key in ("product_id", "store_id", "category"):
             if getattr(grounded, key) != getattr(mentioned, key):
                 setattr(grounded, key, getattr(mentioned, key))
+        grounded.product_reference = mentioned.product_reference
         grounded.date_range = mentioned.date_range
         grounded.date = mentioned.date
         grounded.forecast_horizon = mentioned.forecast_horizon
@@ -94,7 +97,41 @@ def plan_request(message: str, llm_client, context: dict | None = None) -> Reque
             "product_id": mentioned.product_id,
             "store_id": mentioned.store_id,
         }
-    return plan if plan.confidence >= 0.65 else None
+    # Keep valid low-confidence plans so the chat layer can ask a focused
+    # clarification instead of silently turning uncertainty into a generic
+    # rules fallback. Invalid JSON/schema/tool choices still return None.
+    return plan
+
+
+def plan_intent(plan: RequestPlan) -> Intent:
+    """Map the shared planner schema to the intent used by the tool layer."""
+    if plan.request_type == "read" and plan.tool in TOOLS_BY_NAME:
+        return TOOLS_BY_NAME[plan.tool].intent
+    return {
+        "sale": Intent.RECORD_SALE,
+        "receive": Intent.RECEIVE_STOCK,
+        "decrease": Intent.ADJUST_STOCK,
+    }.get(plan.request_type, Intent.UNKNOWN)
+
+
+def reject_conflicting_read_plan(message: str, plan: RequestPlan | None) -> RequestPlan | None:
+    """Keep Gemini and rules on the same route when rules match decisively.
+
+    The planner remains useful for novel wording that rules cannot classify;
+    for a known deterministic intent, however, a conflicting tool guess is
+    discarded and the chat service uses the rules-selected tool.
+    """
+    if plan is None or plan.request_type != "read":
+        return plan
+    intent = classify_intent(message)
+    expected_tool = TOOLS_BY_INTENT.get(intent)
+    if expected_tool and expected_tool.name != plan.tool:
+        log.info(
+            "Discarding conflicting Gemini tool %s for deterministic intent %s (expected %s)",
+            plan.tool, intent.value, expected_tool.name,
+        )
+        return None
+    return plan
 
 
 def prefer_explicit_stock_action(message: str, plan: RequestPlan | None = None) -> RequestPlan | None:
@@ -131,8 +168,26 @@ def prefer_explicit_stock_action(message: str, plan: RequestPlan | None = None) 
 
     # Accept frequent misspellings while keeping plain stock questions on the
     # read path. This requires both a receipt term and a quantity plus IDs.
-    if re.search(r"\b(?:receiv\w*|reciev\w*|restock\w*|deliver\w*|delievery|delieverd)\b", message, re.I):
+    if re.search(r"\b(?:receiv\w*|reciev\w*|restock\w*|deliver\w*|deliev\w*|add|increase)\b", message, re.I):
         return RequestPlan(request_type="receive", quantity=quantity, reason="receipt", confidence=1.0,
+                           arguments={"product_id": entities.product_id, "store_id": entities.store_id})
+
+    # Preserve an explicit decrease verb even when Gemini guesses that the
+    # user means a delivery. An unqualified decrease remains a clarification;
+    # only a clearly stated reason is applied after the usual confirmation.
+    if re.search(r"\b(?:deduct|subtract|remove|reduce|decrease|take\s+away)\b", message, re.I):
+        reason = "unknown"
+        if re.search(r"\b(?:sold|sale|customer|bought|purchased)\b", message, re.I):
+            reason = "sale"
+        elif re.search(r"\b(?:damag\w*|broken)\b", message, re.I):
+            reason = "damage"
+        elif re.search(r"\b(?:lost|missing)\b", message, re.I):
+            reason = "loss"
+        elif re.search(r"\b(?:wast\w*|expired)\b", message, re.I):
+            reason = "waste"
+        elif re.search(r"\b(?:correction|corrected)\b", message, re.I):
+            reason = "correction"
+        return RequestPlan(request_type="decrease", quantity=quantity, reason=reason, confidence=1.0,
                            arguments={"product_id": entities.product_id, "store_id": entities.store_id})
 
     # "sales of P... with stock of 4000" is a terse sale entry, while ordinary

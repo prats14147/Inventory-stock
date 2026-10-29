@@ -99,6 +99,7 @@ TOOL_DEFINITIONS = (
     ToolDefinition("get_slow_selling_products", Intent.BOTTOM_SELLING, "Rank products by lowest units sold.", backend_service="sales_service.get_bottom_products"),
     ToolDefinition("get_category_analysis", Intent.CATEGORY_ANALYSIS, "Summarize unit sales by category.", backend_service="sales_service.get_category_analysis"),
     ToolDefinition("get_store_analysis", Intent.STORE_ANALYSIS, "Summarize unit sales by store.", backend_service="sales_service.get_store_analysis"),
+    ToolDefinition("get_store_profitability", Intent.STORE_PROFITABILITY, "Compare store revenue, cost of goods, gross profit/loss, and cost coverage.", backend_service="sales_service.get_profitability_analysis"),
     ToolDefinition("forecast_demand", Intent.DEMAND_FORECAST, "Forecast demand for one product.", required_arguments=("product_id",), backend_service="forecast_service.forecast_product_demand"),
     ToolDefinition("get_stockout_risk", Intent.STOCKOUT_RISK, "List HIGH/MEDIUM stockout risk by product/store row, using available stock, forecast lead-time demand and safety stock; a product may be risky at one store even if aggregate stock looks sufficient.", backend_service="stockout_service.list_stockout_risks / calculate_stockout_risk"),
     ToolDefinition("get_reorder_recommendation", Intent.REORDER_RECOMMENDATION, "Calculate how much to reorder for one product or all products.", backend_service="reorder_service.calculate_reorder"),
